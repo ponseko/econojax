@@ -69,7 +69,7 @@ class EconomyEnv(JaxBaseEnv):
     trade_price_ceiling: int = 10
     max_orders_per_agent: int = 15
     
-    coin_per_craft: int = 20 # multiplied by skill level
+    coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1
     craft_labor_cost: int = 1
     trade_labor_cost: int = 0.05
@@ -134,7 +134,7 @@ class EconomyEnv(JaxBaseEnv):
             start_year_inventory_coin=start_coin,
             income_this_period_pre_tax=jnp.zeros(self.num_population, dtype=jnp.int32),
             income_prev_period_pre_tax=jnp.zeros(self.num_population, dtype=jnp.int32),
-            marginal_income=jnp.zeros(self.num_population, dtype=jnp.float32),
+            marginal_income=jnp.ones(self.num_population, dtype=jnp.float32),
             net_tax_payed_prev_period=jnp.zeros(self.num_population, dtype=jnp.int32),
             timestep=0,
             productivity=0.,
@@ -655,7 +655,7 @@ class EconomyEnv(JaxBaseEnv):
             state.inventory_coin + state.escrow_coin,
             state.start_year_inventory_coin
         )
-        income_this_period_pre_tax = state.inventory_coin + state.escrow_coin - state.start_year_inventory_coin
+        income_this_period_pre_tax = state.inventory_coin + state.escrow_coin - start_year_inventory_coin
         
         state = jax.lax.cond(
             is_tax_day,
@@ -668,7 +668,7 @@ class EconomyEnv(JaxBaseEnv):
         highest_bracket_per_agent = jnp.digitize(income_this_period_pre_tax, self.tax_bracket_cutoffs) - 1
         applicable_tax_rates = state.tax_rates[highest_bracket_per_agent]
         return state.replace(
-            marginal_income=applicable_tax_rates,
+            marginal_income=1 - applicable_tax_rates,
             income_this_period_pre_tax=income_this_period_pre_tax,
             income_prev_period_pre_tax=income_prev_period_pre_tax,
             start_year_inventory_coin=start_year_inventory_coin
@@ -730,6 +730,3 @@ if __name__ == "__main__":
 
     (obs, reward, terminated, truncated, info), state = env.step(key, state, action)
     print(state, (obs, reward, terminated, truncated, info))
-
-
-    
