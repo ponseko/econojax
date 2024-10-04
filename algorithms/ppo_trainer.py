@@ -39,6 +39,8 @@ class PpoTrainerParams:
     num_minibatches: int = 6  # Number of mini-batches
     update_epochs: int = 6  # K epochs to update the policy
     shared_policies: bool = True
+    network_size_pop: list = eqx.field(default_factory=lambda: [128, 128])
+    network_size_gov: list = eqx.field(default_factory=lambda: [128, 128])
 
     # to be filled in runtime in at init:
     batch_size: int = 0  # batch size (num_envs * num_steps)
@@ -101,10 +103,11 @@ def build_ppo_trainer(
         pop_network_key = jnp.expand_dims(pop_network_key, axis=0)
     else:
         pop_network_key = jax.random.split(pop_network_key, num_agents)
-    population_actor = jax.vmap(ActorNetwork, in_axes=(0, None, None, None))(pop_network_key, pop_observation_space.shape[-1], [128, 128], pop_action_space.n)
-    population_critic = jax.vmap(ValueNetwork, in_axes=(0, None, None))(pop_network_key, pop_observation_space.shape[-1], [128, 128])
-    government_actor = ActorNetworkMultiDiscrete(gov_network_key, gov_observation_space.shape, [128, 128], gov_action_space.nvec)
-    government_critic = ValueNetwork(gov_network_key, gov_observation_space.shape, [128, 128])
+    # convert possible list of strings to list of ints
+    population_actor = jax.vmap(ActorNetwork, in_axes=(0, None, None, None))(pop_network_key, pop_observation_space.shape[-1], config.network_size_pop, pop_action_space.n)
+    population_critic = jax.vmap(ValueNetwork, in_axes=(0, None, None))(pop_network_key, pop_observation_space.shape[-1], config.network_size_pop)
+    government_actor = ActorNetworkMultiDiscrete(gov_network_key, gov_observation_space.shape, config.network_size_gov, gov_action_space.nvec)
+    government_critic = ValueNetwork(gov_network_key, gov_observation_space.shape, config.network_size_gov)
 
     number_of_update_steps = (
         config.num_iterations * config.num_minibatches * config.update_epochs

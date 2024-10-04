@@ -23,6 +23,8 @@ argument_parser.add_argument("-l", "--load_model", type=str, default=None)
 argument_parser.add_argument("-i", "--individual_policies", action="store_true")
 argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
+argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
 args = argument_parser.parse_args()
 
 rng = jax.random.PRNGKey(args.population_seed) 
@@ -61,7 +63,9 @@ config = PpoTrainerParams(
     debug=args.debug,
     trainer_seed=args.seed,
     shared_policies=not args.individual_policies,
-    num_log_episodes_after_training=3
+    num_log_episodes_after_training=3,
+    network_size_pop=args.network_size_pop,
+    network_size_gov=args.network_size_gov,
 )
 
 merged_config = {**config.__dict__, **env.__dict__}
