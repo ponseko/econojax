@@ -25,7 +25,25 @@ argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
 argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
-args = argument_parser.parse_args()
+argument_parser.add_argument("--trade_prices", nargs="+", type=float) # env default: np.arange(1, 11)
+args, extra_args = argument_parser.parse_known_args()
+
+# Convert extra_args to a dictionary we assume that they set environment parameters.
+env_parameters = {}
+for i in range(0, len(extra_args), 2):
+    key = extra_args[i].lstrip('--')
+    # check if the value is a float or an int
+    if "." in extra_args[i + 1]:
+        try:
+            value = float(extra_args[i + 1])
+        except ValueError:
+            value = extra_args[i + 1]
+    else:
+        try:
+            value = int(extra_args[i + 1])
+        except ValueError:
+            value = extra_args[i + 1]
+    env_parameters[key] = value
 
 rng = jax.random.PRNGKey(args.population_seed) 
 rng, ratio_seed, shuffle_seed = jax.random.split(rng, 3)
@@ -54,7 +72,9 @@ env = EconomyEnv(
     num_resources=args.num_resources,
     craft_skills=craft_skills,
     gather_skills=gather_skills,
-    enable_government=args.enable_government
+    enable_government=args.enable_government,
+    possible_trade_prices=args.trade_prices,
+    **env_parameters
 )
 
 config = PpoTrainerParams(

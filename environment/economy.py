@@ -65,9 +65,10 @@ class EconomyEnv(JaxBaseEnv):
     gather_skills: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION, DEFAULT_NUM_RESOURCES)))
     
     trade_expiry_time: int = 30
-    trade_price_floor: int = 1
-    trade_price_ceiling: int = 10
+    # trade_price_floor: int = 1
+    # trade_price_ceiling: int = 10
     max_orders_per_agent: int = 15
+    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11))
     
     coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1
@@ -86,7 +87,8 @@ class EconomyEnv(JaxBaseEnv):
         return self.num_population + 1
     @property
     def trade_actions_per_resource(self):
-        return 2 * (self.trade_price_ceiling - self.trade_price_floor + 1) # 2 for buy and sell
+        # return 2 * (self.trade_price_ceiling - self.trade_price_floor + 1) # 2 for buy and sell
+        return 2 * len(self.possible_trade_prices)
     @property
     def trade_actions_total(self):
         return self.num_resources * self.trade_actions_per_resource
@@ -103,11 +105,13 @@ class EconomyEnv(JaxBaseEnv):
         assert 1 <= self.tax_period_length < self.max_steps_in_episode
         assert len(self.gather_skills) == self.num_population
         assert len(self.craft_skills) == self.num_population
-        assert (self.trade_actions_per_resource / 2) % 2 == 0, "The number of sell and buy actions per resource should be even"
+        # assert (self.trade_actions_per_resource / 2) % 2 == 0, "The number of sell and buy actions per resource should be even"
         assert self.tax_bracket_cutoffs[0] == 0, "The first tax bracket should start at 0"
         assert self.tax_bracket_cutoffs[-1] == np.inf, "The last tax bracket should be infinity"
         assert np.all(np.diff(self.tax_bracket_cutoffs) > 0), "Tax brackets should be sorted in ascending order"
         assert self.craft_diff_resources_required >= 0 and self.craft_diff_resources_required <= self.num_resources
+        assert np.all(self.possible_trade_prices > 0), "Trade prices should be positive"
+        assert np.all(np.diff(self.possible_trade_prices) > 0), "Trade prices should be sorted in ascending order"
 
     def __post_init__(self):
         if self.craft_diff_resources_required == 0:
@@ -259,7 +263,8 @@ class EconomyEnv(JaxBaseEnv):
         resources_inventory = state.inventory_resources 
 
         ### trade
-        prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1)
+        # prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1)
+        prices = self.possible_trade_prices
         num_trade_actions = int(self.trade_actions_per_resource / 2)
         # Buy orders (need enough coin)
         buy_resource_masks = (coin_inventory[:, None] >= prices).astype(jnp.bool)
@@ -478,7 +483,8 @@ class EconomyEnv(JaxBaseEnv):
     @eqx.filter_jit
     def component_trading(self, state: EnvState, actions: chex.Array) -> EnvState:
         trade_time_index = state.timestep % self.trade_expiry_time
-        prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1, dtype=jnp.int16)
+        # prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1, dtype=jnp.int16)
+        prices = self.possible_trade_prices
         num_trade_actions = self.trade_actions_total
 
         coin_inventory = state.inventory_coin
