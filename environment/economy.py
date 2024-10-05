@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import equinox as eqx 
 from dataclasses import replace, asdict
+import optax
 
 from util.spaces import MultiDiscrete
 from util.util_functions import get_gini
@@ -50,6 +51,7 @@ DEFAULT_NUM_RESOURCES = 2 # e.g. stone and wood
 class EconomyEnv(JaxBaseEnv):
 
     name: str = "economy_env"
+    seed: int = 0
 
     num_population: int = DEFAULT_NUM_POPULATION # Excluding the government
     num_resources: int = DEFAULT_NUM_RESOURCES
@@ -61,8 +63,10 @@ class EconomyEnv(JaxBaseEnv):
     insert_agent_ids: bool = False
 
     starting_coin: int = 15
-    craft_skills: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION,)))
-    gather_skills: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION, DEFAULT_NUM_RESOURCES)))
+    init_craft_skills: np.ndarray = None # eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION,)))
+    init_gather_skills: np.ndarray = None # eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION, DEFAULT_NUM_RESOURCES)))
+    base_skill_development_multiplier: float = .05 # Allow skills to improve by performing actions (0 == no improvement)
+    max_skill_level: float = 5
     
     trade_expiry_time: int = 30
     # trade_price_floor: int = 1
@@ -97,14 +101,28 @@ class EconomyEnv(JaxBaseEnv):
     @property
     def craft_action_index(self):
         return self.trade_actions_total + self.num_resources
+    
+    def __post_init__(self):
+        if self.craft_diff_resources_required == 0:
+            self.__setattr__("craft_diff_resources_required", self.num_resources)
+        
+        key = jax.random.PRNGKey(self.seed)
+        if self.init_craft_skills is None:
+            init_craft_skills = jax.random.normal(key, shape=(self.num_population,)) + 1
+            init_craft_skills = jnp.clip(init_craft_skills, 0, self.max_skill_level)
+            self.__setattr__("init_craft_skills", init_craft_skills)
+        if self.init_gather_skills is None:
+            init_gather_skills = jax.random.normal(key, shape=(self.num_population, self.num_resources)) + 1
+            init_gather_skills = jnp.clip(init_gather_skills, 0, self.max_skill_level)
+            self.__setattr__("init_gather_skills", init_gather_skills)
 
     def __check_init__(self):
         assert self.name
         assert self.num_population > 0
         assert self.max_steps_in_episode > 0
         assert 1 <= self.tax_period_length < self.max_steps_in_episode
-        assert len(self.gather_skills) == self.num_population
-        assert len(self.craft_skills) == self.num_population
+        assert len(self.init_gather_skills) == self.num_population
+        assert len(self.init_craft_skills) == self.num_population
         # assert (self.trade_actions_per_resource / 2) % 2 == 0, "The number of sell and buy actions per resource should be even"
         assert self.tax_bracket_cutoffs[0] == 0, "The first tax bracket should start at 0"
         assert self.tax_bracket_cutoffs[-1] == np.inf, "The last tax bracket should be infinity"
@@ -112,10 +130,6 @@ class EconomyEnv(JaxBaseEnv):
         assert self.craft_diff_resources_required >= 0 and self.craft_diff_resources_required <= self.num_resources
         assert np.all(self.possible_trade_prices > 0), "Trade prices should be positive"
         assert np.all(np.diff(self.possible_trade_prices) > 0), "Trade prices should be sorted in ascending order"
-
-    def __post_init__(self):
-        if self.craft_diff_resources_required == 0:
-            self.__setattr__("craft_diff_resources_required", self.num_resources)
 
     @eqx.filter_jit
     def reset_env(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], EnvState]:
@@ -130,8 +144,8 @@ class EconomyEnv(JaxBaseEnv):
             inventory_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.int16),
             escrow_coin=jnp.zeros(self.num_population, dtype=jnp.int32),
             escrow_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.int16),
-            skills_craft=self.craft_skills, # fixed
-            skills_gather_resources=self.gather_skills, # fixed
+            skills_craft=self.init_craft_skills,
+            skills_gather_resources=self.init_gather_skills,
             market_orders=jnp.zeros((self.trade_expiry_time, self.num_resources, 2, self.num_population), dtype=jnp.int16), # 2 for buy and sell
             trade_price_history=jnp.zeros((self.trade_expiry_time, self.num_resources), dtype=jnp.float32),
             tax_rates=jnp.zeros(len(self.tax_bracket_cutoffs) - 1, dtype=jnp.float32),
@@ -473,6 +487,24 @@ class EconomyEnv(JaxBaseEnv):
         resource_inventories -= resource_changes
         # resource_inventories -= (craft_actions * self.craft_num_resource_required)[:, None].astype(jnp.int16)
         labor_inventories += (will_craft * self.craft_labor_cost)
+
+        # Skill development
+        if self.base_skill_development_multiplier > 0:
+            sched = optax.exponential_decay(
+                init_value=self.base_skill_development_multiplier, 
+                transition_steps=5, 
+                decay_rate=0.005
+            ) # learning with high skill is harder
+            gather_multiplier = sched(state.skills_gather_resources)
+            craft_multiplier = sched(state.skills_craft)
+            gather_skill_development = (gather_actions * gather_multiplier) + 1
+            skills_gather_resources = jnp.minimum(state.skills_gather_resources * gather_skill_development, self.max_skill_level)
+            craft_skill_development = (will_craft * craft_multiplier) + 1
+            skills_craft = jnp.minimum(state.skills_craft * craft_skill_development, self.max_skill_level)
+            state = state.replace(
+                skills_gather_resources=skills_gather_resources,
+                skills_craft=skills_craft
+            )
 
         return state.replace(
             inventory_coin=coin_inventories,

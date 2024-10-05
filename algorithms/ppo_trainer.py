@@ -39,6 +39,8 @@ class PpoTrainerParams:
     num_minibatches: int = 6  # Number of mini-batches
     update_epochs: int = 6  # K epochs to update the policy
     shared_policies: bool = True
+    # share_policy_nets: bool = True
+    # share_value_nets: bool = True
     network_size_pop: list = eqx.field(default_factory=lambda: [128, 128])
     network_size_gov: list = eqx.field(default_factory=lambda: [128, 128])
 
