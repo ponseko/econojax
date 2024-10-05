@@ -68,7 +68,7 @@ class EconomyEnv(JaxBaseEnv):
     # trade_price_floor: int = 1
     # trade_price_ceiling: int = 10
     max_orders_per_agent: int = 15
-    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11))
+    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, dtype=np.int16))
     
     coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1

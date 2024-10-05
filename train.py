@@ -1,5 +1,6 @@
 from environment.economy import EconomyEnv
 from algorithms.ppo_trainer import build_ppo_trainer, PpoTrainerParams
+from util.logging import log_eval_logs_to_wandb
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -25,7 +26,7 @@ argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
 argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
-argument_parser.add_argument("--trade_prices", nargs="+", type=float) # env default: np.arange(1, 11)
+argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11, dtype=int))
 args, extra_args = argument_parser.parse_known_args()
 
 # Convert extra_args to a dictionary we assume that they set environment parameters.
@@ -112,51 +113,6 @@ if not os.path.exists("models"):
     os.makedirs("models")
 eqx.tree_serialise_leaves(f"models/ppo_{time.time()}", trained_agent)
 
-def log_eval_logs_to_wandb(log):
-    import time
-    import matplotlib.pyplot as plt
-    if args.wandb_group is None:
-        group_name = f"eval_logs_{int(time.time())}"
-    else:
-        group_name = args.wandb_group
-    num_envs = log["timestep"].shape[0]
-    num_steps_per_episode = log["timestep"].shape[1]
-    for env_id in range(num_envs):
-        run = wandb.init(
-            project=WANDB_PROJECT_NAME,
-            config=merged_config,
-            tags=["eval"],
-            group=group_name,
-        )
-        for step in range(0, num_steps_per_episode, 20):
-            log_step = jax.tree.map(lambda x: x[env_id, step], log)
-            log_step.pop("terminal_observation")
-            run.log(log_step)
-
-        # ACTION DISTRIBUTION
-        bins = np.concatenate([
-            np.arange(0, env.trade_actions_total, 10, dtype=int),
-            np.arange(env.trade_actions_total, env.action_space("population").n + 1, dtype=int),
-        ], dtype=int)
-        for agent_id, agent_actions in eval_logs["population_actions"].items():
-            counts, _ = np.histogram(agent_actions[0], bins=bins)
-
-            labels = [label for pair in zip([f"buy_{i}" for i in range(env.num_resources)], [f"sell_{i}" for i in range(env.num_resources)]) for label in pair] + [f"gather_{i}" for i in range(env.num_resources)] + ["craft"]
-            if len(counts) > len(labels):
-                labels.append("noop")
-            action_dist = {
-                label: count for label, count in zip(labels, counts)
-            }
-            total = sum(action_dist.values())
-            action_dist = {k: v / total for k, v in action_dist.items()}
-            fig = plt.figure()
-            plt.bar(list(action_dist.keys()), action_dist.values())
-            plt.ylabel("Percentage of actions")
-            plt.ylim(0, 1)
-            run.log({f"Action dist agent {agent_id}": wandb.Image(fig)}, commit=agent_id == len(eval_logs["population_actions"]) - 1)
-            plt.close()
-        run.finish()
-
 if args.wandb:
     wandb.finish()
-    log_eval_logs_to_wandb(eval_logs)
+    log_eval_logs_to_wandb(eval_logs, args, WANDB_PROJECT_NAME, merged_config, env)
