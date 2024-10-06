@@ -77,8 +77,8 @@ env = EconomyEnv(
     seed=args.population_seed,
     num_population=args.num_agents,
     num_resources=args.num_resources,
-    # craft_skills=craft_skills,
-    # gather_skills=gather_skills,
+    # init_craft_skills=craft_skills,
+    # init_gather_skills=gather_skills,
     enable_government=args.enable_government,
     possible_trade_prices=args.trade_prices,
     **env_parameters
