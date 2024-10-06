@@ -68,9 +68,9 @@ class EconomyEnv(JaxBaseEnv):
     base_skill_development_multiplier: float = .05 # Allow skills to improve by performing actions (0 == no improvement)
     max_skill_level: float = 5
     
-    trade_expiry_time: int = 15
-    max_orders_per_agent: int = 15
-    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, dtype=np.int16))
+    trade_expiry_time: int = 20
+    max_orders_per_agent: int = 20
+    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, dtype=np.uint8))
     
     coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1
@@ -141,13 +141,13 @@ class EconomyEnv(JaxBaseEnv):
             },
             inventory_coin=start_coin,
             inventory_labor=jnp.zeros(self.num_population),
-            inventory_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.int16),
+            inventory_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.uint16),
             escrow_coin=jnp.zeros(self.num_population, dtype=jnp.int32),
-            escrow_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.int16),
+            escrow_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.uint16),
             skills_craft=self.init_craft_skills,
             skills_gather_resources=self.init_gather_skills,
-            market_orders=jnp.zeros((self.trade_expiry_time, self.num_resources, 2, self.num_population), dtype=jnp.int16), # 2 for buy and sell
-            trade_price_history=jnp.zeros((self.trade_expiry_time, self.num_resources), dtype=jnp.float32),
+            market_orders=jnp.zeros((self.trade_expiry_time, self.num_resources, 2, self.num_population), dtype=jnp.uint8), # 2 for buy and sell
+            trade_price_history=jnp.zeros((self.trade_expiry_time, self.num_resources), dtype=jnp.float16),
             tax_rates=jnp.zeros(len(self.tax_bracket_cutoffs) - 1, dtype=jnp.float32),
             start_year_inventory_coin=start_coin,
             income_this_period_pre_tax=jnp.zeros(self.num_population, dtype=jnp.int32),
@@ -463,8 +463,8 @@ class EconomyEnv(JaxBaseEnv):
         
         gather_actions = (agent_actions == gather_resource_action_indices[:, None]).T # (num_population, num_resources)
         # gather_bonus = gather_actions * (jnp.floor(state.skills_gather_resources)).astype(jnp.int16)
-        gather_bonus = gather_actions * (jnp.floor(state.skills_gather_resources + skill_success[:, None])).astype(jnp.int16)
-        resource_inventories += (gather_bonus).astype(jnp.int16)
+        gather_bonus = gather_actions * (jnp.floor(state.skills_gather_resources + skill_success[:, None])).astype(jnp.uint16)
+        resource_inventories += (gather_bonus).astype(jnp.uint16)
         labor_inventories += jnp.any(gather_actions, axis=1) * self.gather_labor_cost
         
         craft_actions = agent_actions == self.craft_action_index
@@ -538,10 +538,10 @@ class EconomyEnv(JaxBaseEnv):
 
         ### Process actions (new bids/asks)
         # create a one-hot encoded matrix from the actions array (the first num_actions in actions are trade actions)
-        one_hot_market_actions = jax.nn.one_hot(actions, num_trade_actions, dtype=jnp.int16) # (num_population, num_trade_actions)
+        one_hot_market_actions = jax.nn.one_hot(actions, num_trade_actions, dtype=jnp.uint8) # (num_population, num_trade_actions)
         one_hot_market_actions *= jnp.tile(prices, num_trade_actions // len(prices)) # correct for pricing
-        market_actions = one_hot_market_actions.reshape(self.num_population, self.num_resources, 2, -1).sum(axis=-1)
-        market_actions = jnp.moveaxis(market_actions, 0, -1).astype(jnp.int16) # (num_resources, 2, num_population) (these are the action of this timestep)
+        market_actions = one_hot_market_actions.reshape(self.num_population, self.num_resources, 2, -1).sum(axis=-1, dtype=jnp.uint8)
+        market_actions = jnp.moveaxis(market_actions, 0, -1).astype(jnp.uint8) # (num_resources, 2, num_population) (these are the action of this timestep)
 
         # update market state:
         market_orders = market_orders.at[trade_time_index].set(market_actions)
@@ -624,9 +624,9 @@ class EconomyEnv(JaxBaseEnv):
         inventory_changes = jnp.stack([x[0] for x in orders_out], axis=1)
         total_coin_inventory_changes = inventory_changes[:, :, 0].sum(axis=1)
         total_coin_escrow_changes = inventory_changes[:, :, 1].sum(axis=1)
-        resource_inventory_changes = inventory_changes[:, :, 2].astype(jnp.int16)
-        resource_escrow_changes = inventory_changes[:, :, 3].astype(jnp.int16)
-        avg_trade_price_this_step = jnp.array([x[1] for x in orders_out])
+        resource_inventory_changes = inventory_changes[:, :, 2].astype(jnp.uint16)
+        resource_escrow_changes = inventory_changes[:, :, 3].astype(jnp.uint16)
+        avg_trade_price_this_step = jnp.array([x[1] for x in orders_out], dtype=jnp.float16)
         market_orders_rolled = jnp.concatenate([x[2] for x in orders_out], axis=1)
 
         coin_inventory += total_coin_inventory_changes
