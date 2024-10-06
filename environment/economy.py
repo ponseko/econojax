@@ -63,22 +63,20 @@ class EconomyEnv(JaxBaseEnv):
     insert_agent_ids: bool = False
 
     starting_coin: int = 15
-    init_craft_skills: np.ndarray = None # eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION,)))
-    init_gather_skills: np.ndarray = None # eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION, DEFAULT_NUM_RESOURCES)))
+    init_craft_skills: np.ndarray = None
+    init_gather_skills: np.ndarray = None
     base_skill_development_multiplier: float = .05 # Allow skills to improve by performing actions (0 == no improvement)
     max_skill_level: float = 5
     
     trade_expiry_time: int = 30
-    # trade_price_floor: int = 1
-    # trade_price_ceiling: int = 10
-    max_orders_per_agent: int = 15
+    max_orders_per_agent: int = 30
     possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, dtype=np.int16))
     
     coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1
     craft_labor_cost: int = 1
     trade_labor_cost: int = 0.05
-    craft_diff_resources_required: int = 2 # 0 == at least ``   `` of EACH resource
+    craft_diff_resources_required: int = 0 # 0 = log2(num_resources) rounded down
     craft_num_resource_required: int = 2 # Requirements per resource
 
     tax_bracket_cutoffs: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.array([0, 380.980, 755.188, np.inf])) # Dutch tax bracket (scaled down by 100)
@@ -104,7 +102,9 @@ class EconomyEnv(JaxBaseEnv):
     
     def __post_init__(self):
         if self.craft_diff_resources_required == 0:
-            self.__setattr__("craft_diff_resources_required", self.num_resources)
+            diff_required = int(np.log2(self.num_resources))
+            diff_required = np.clip(diff_required, 0, self.num_resources)
+            self.__setattr__("craft_diff_resources_required", int(diff_required))
         
         key = jax.random.PRNGKey(self.seed)
         if self.init_craft_skills is None:
