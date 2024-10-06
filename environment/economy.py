@@ -68,8 +68,8 @@ class EconomyEnv(JaxBaseEnv):
     base_skill_development_multiplier: float = .05 # Allow skills to improve by performing actions (0 == no improvement)
     max_skill_level: float = 5
     
-    trade_expiry_time: int = 30
-    max_orders_per_agent: int = 30
+    trade_expiry_time: int = 15
+    max_orders_per_agent: int = 15
     possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, dtype=np.int16))
     
     coin_per_craft: int = 20 # fixed multiplier of the craft skill
