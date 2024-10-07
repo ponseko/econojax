@@ -65,12 +65,12 @@ class EconomyEnv(JaxBaseEnv):
     starting_coin: int = 15
     init_craft_skills: np.ndarray = None
     init_gather_skills: np.ndarray = None
-    base_skill_development_multiplier: float = .05 # Allow skills to improve by performing actions (0 == no improvement)
+    base_skill_development_multiplier: float = .0 # Allow skills to improve by performing actions (0 == no improvement)
     max_skill_level: float = 5
     
     trade_expiry_time: int = 30
     max_orders_per_agent: int = 15
-    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, dtype=np.int8))
+    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, step=2, dtype=np.int8))
     
     coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1

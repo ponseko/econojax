@@ -26,7 +26,7 @@ argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
 argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
-argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11, dtype=int))
+argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11,step=2, dtype=int))
 args, extra_args = argument_parser.parse_known_args()
 
 # Convert extra_args to a dictionary. we assume that they set environment parameters.
