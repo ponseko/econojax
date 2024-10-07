@@ -53,32 +53,32 @@ for i in range(0, len(extra_args), 2):
 
 rng = jax.random.PRNGKey(args.population_seed) 
 rng, ratio_seed, shuffle_seed = jax.random.split(rng, 3)
-# max_bonus_craft = 5
-# max_bonus_gather = 3
-# ratios = np.random.pareto(1, (50_000, ))
-# ratios = jax.random.pareto(
-#     ratio_seed, 
-#     1, 
-#     shape=(10000, args.num_agents, args.num_resources + 1)
-# ).sort().mean(axis=0)
-# ratios = ratios / ratios.sum(axis=1, keepdims=True)
-# ratios = jax.random.permutation(shuffle_seed, ratios, axis=1, independent=True)
-# ratios = ratios + jax.random.normal(ratio_seed, ratios.shape) * 0.5 # some noise added
-# ratios = jnp.maximum(0, ratios)
-# ratios = ratios / ratios.sum(axis=1, keepdims=True)
-# ratios = jnp.nan_to_num(ratios, nan=0.0)
-# # order on the first skill, so we know the first agents are skilled at crafting
-# ratios = ratios[ratios[:, 0].argsort(descending=True)]
-# craft_skills = max_bonus_craft * ratios[:, 0]
-# gather_skills = max_bonus_gather * ratios[:, 1:]
-# print("skills\n", jnp.concatenate([craft_skills[:, None], gather_skills], axis=1))
+max_bonus_craft = 5
+max_bonus_gather = 3
+ratios = np.random.pareto(1, (50_000, ))
+ratios = jax.random.pareto(
+    ratio_seed, 
+    1, 
+    shape=(10000, args.num_agents, args.num_resources + 1)
+).sort().mean(axis=0)
+ratios = ratios / ratios.sum(axis=1, keepdims=True)
+ratios = jax.random.permutation(shuffle_seed, ratios, axis=1, independent=True)
+ratios = ratios + jax.random.normal(ratio_seed, ratios.shape) * 0.5 # some noise added
+ratios = jnp.maximum(0, ratios)
+ratios = ratios / ratios.sum(axis=1, keepdims=True)
+ratios = jnp.nan_to_num(ratios, nan=0.0)
+# order on the first skill, so we know the first agents are skilled at crafting
+ratios = ratios[ratios[:, 0].argsort(descending=True)]
+craft_skills = max_bonus_craft * ratios[:, 0]
+gather_skills = max_bonus_gather * ratios[:, 1:]
+print("skills\n", jnp.concatenate([craft_skills[:, None], gather_skills], axis=1))
 
 env = EconomyEnv(
     seed=args.population_seed,
     num_population=args.num_agents,
     num_resources=args.num_resources,
-    # init_craft_skills=craft_skills,
-    # init_gather_skills=gather_skills,
+    init_craft_skills=craft_skills,
+    init_gather_skills=gather_skills,
     enable_government=args.enable_government,
     possible_trade_prices=args.trade_prices,
     **env_parameters
