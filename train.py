@@ -10,6 +10,8 @@ import numpy as np
 import os
 import time
 
+wandb.require("core")
+
 WANDB_PROJECT_NAME = "EconoJax"
 argument_parser = argparse.ArgumentParser()
 argument_parser.add_argument("-w", "--wandb", action="store_true")
@@ -27,6 +29,8 @@ argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
 argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11,step=2, dtype=int))
+argument_parser.add_argument("--eval_runs", type=int, default=3)
+argument_parser.add_argument("--rollout_length", type=int, default=150)
 args, extra_args = argument_parser.parse_known_args()
 
 # Convert extra_args to a dictionary. we assume that they set environment parameters.
@@ -91,9 +95,10 @@ config = PpoTrainerParams(
     debug=args.debug,
     trainer_seed=args.seed,
     shared_policies=not args.individual_policies,
-    num_log_episodes_after_training=3,
+    num_log_episodes_after_training=args.eval_runs,
     network_size_pop=args.network_size_pop,
     network_size_gov=args.network_size_gov,
+    num_steps=args.rollout_length
 )
 
 merged_config = {**config.__dict__, **env.__dict__}
