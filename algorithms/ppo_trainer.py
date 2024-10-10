@@ -15,6 +15,9 @@ from algorithms.networks import ActorNetwork, ValueNetwork, ActorNetworkMultiDis
 from environment.economy import EconomyEnv
 from util.callbacks import logwrapper_callback, wandb_callback
 
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
+
 @chex.dataclass(frozen=True)
 class PpoTrainerParams:
     num_envs: int = 6
@@ -170,6 +173,10 @@ def build_ppo_trainer(
 
     reset_key = jax.random.split(reset_key, config.num_envs)
     obs_v, env_state_v = jax.vmap(env.reset, in_axes=(0))(reset_key)
+
+    num_devices = jax.device_count()
+    mesh = Mesh(devices=mesh_utils.create_device_mesh((num_devices)), axis_names=('x'))
+    env_state_v = jax.device_put(env_state_v, NamedSharding(mesh, P('x')))
 
     def get_action_logits_dict(observation, train_state: Union[TrainState, eqx.Module], agent_name: str = None):
         assert isinstance(train_state, TrainState) or (isinstance(train_state, eqx.Module) and agent_name is not None)
