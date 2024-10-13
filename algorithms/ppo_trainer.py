@@ -38,10 +38,11 @@ class PpoTrainerParams:
     num_steps: int = 150  # steps per environment
     num_minibatches: int = 6  # Number of mini-batches
     update_epochs: int = 6  # K epochs to update the policy
-    shared_policies: bool = True
-    # share_policy_nets: bool = True
-    # share_value_nets: bool = True
-    network_size_pop: list = eqx.field(default_factory=lambda: [128, 128])
+    # shared_policies: bool = True
+    share_policy_nets: bool = True
+    share_value_nets: bool = True
+    network_size_pop_policy: list = eqx.field(default_factory=lambda: [128, 128])
+    network_size_pop_value: list = eqx.field(default_factory=lambda: [128, 128])
     network_size_gov: list = eqx.field(default_factory=lambda: [128, 128])
 
     # to be filled in runtime in at init:
@@ -74,7 +75,8 @@ class Transition:
 class AgentState(NamedTuple):
     actor: ActorNetwork
     critic: ValueNetwork
-    opt_state: optax.OptState
+    opt_state_policy: optax.OptState
+    opt_state_value: optax.OptState
 
 class TrainState(NamedTuple):
     population: AgentState
@@ -98,18 +100,22 @@ def build_ppo_trainer(
 
     # rng keys
     rng = jax.random.PRNGKey(config.trainer_seed)
-    rng, pop_network_key, gov_network_key, reset_key = jax.random.split(rng, 4)
+    rng, pop_network_key_policy, pop_network_key_value, gov_network_key_policy, gov_network_key_value, reset_key = jax.random.split(rng, 6)
 
     # networks
-    if config.shared_policies:
-        pop_network_key = jnp.expand_dims(pop_network_key, axis=0)
+    if config.share_policy_nets:
+        pop_network_key_policy = jnp.expand_dims(pop_network_key_policy, axis=0)
     else:
-        pop_network_key = jax.random.split(pop_network_key, num_agents)
+        pop_network_key_policy = jax.random.split(pop_network_key_policy, num_agents)
+    if config.share_value_nets:
+        pop_network_key_value = jnp.expand_dims(pop_network_key_value, axis=0)
+    else:
+        pop_network_key_value = jax.random.split(pop_network_key_value, num_agents)
     # convert possible list of strings to list of ints
-    population_actor = jax.vmap(ActorNetwork, in_axes=(0, None, None, None))(pop_network_key, pop_observation_space.shape[-1], config.network_size_pop, pop_action_space.n)
-    population_critic = jax.vmap(ValueNetwork, in_axes=(0, None, None))(pop_network_key, pop_observation_space.shape[-1], config.network_size_pop)
-    government_actor = ActorNetworkMultiDiscrete(gov_network_key, gov_observation_space.shape, config.network_size_gov, gov_action_space.nvec)
-    government_critic = ValueNetwork(gov_network_key, gov_observation_space.shape, config.network_size_gov)
+    population_actor = jax.vmap(ActorNetwork, in_axes=(0, None, None, None))(pop_network_key_policy, pop_observation_space.shape[-1], config.network_size_pop_policy, pop_action_space.n)
+    population_critic = jax.vmap(ValueNetwork, in_axes=(0, None, None))(pop_network_key_value, pop_observation_space.shape[-1], config.network_size_pop_value)
+    government_actor = ActorNetworkMultiDiscrete(gov_network_key_policy, gov_observation_space.shape, config.network_size_gov, gov_action_space.nvec)
+    government_critic = ValueNetwork(gov_network_key_value, gov_observation_space.shape, config.network_size_gov)
 
     number_of_update_steps = (
         config.num_iterations * config.num_minibatches * config.update_epochs
@@ -141,26 +147,37 @@ def build_ppo_trainer(
             eps=1e-5,
         ),
     )
-    population_opt_state = jax.vmap(optimizer.init)({"actor": population_actor, "critic": population_critic})
-    government_opt_state = optimizer.init({"actor": government_actor, "critic": government_critic})
+    population_opt_state_policy = jax.vmap(optimizer.init)(population_actor)
+    population_opt_state_value = jax.vmap(optimizer.init)(population_critic)
+    government_opt_state_policy = optimizer.init(government_actor)
+    government_opt_state_value = optimizer.init(government_critic)
 
     try:
-        population_actor, population_critic, population_opt_state = jax.tree.map(
-            lambda x: jnp.squeeze(x, axis=0), (population_actor, population_critic, population_opt_state)
+        population_actor, population_opt_state_policy = jax.tree.map(
+            lambda x: jnp.squeeze(x, axis=0), (population_actor, population_opt_state_policy)
         )
     except ValueError: # Squeezing not required (individual agents)
         pass
+    try:
+        population_critic, population_opt_state_value = jax.tree.map(
+            lambda x: jnp.squeeze(x, axis=0), (population_critic, population_opt_state_value)
+        )
+    except ValueError: # Squeezing not required (individual agents)
+        pass
+    
 
     train_state = TrainState(
         population=AgentState(
             actor=population_actor,
             critic=population_critic,
-            opt_state=population_opt_state,
+            opt_state_policy=population_opt_state_policy,
+            opt_state_value=population_opt_state_value,
         ),
         government=AgentState(
             actor=government_actor,
             critic=government_critic,
-            opt_state=government_opt_state,
+            opt_state_policy=government_opt_state_policy,
+            opt_state_value=government_opt_state_value,
         ),
     )
     if load_model:
@@ -175,11 +192,11 @@ def build_ppo_trainer(
         assert isinstance(train_state, TrainState) or (isinstance(train_state, eqx.Module) and agent_name is not None)
 
         if isinstance(train_state, eqx.Module): # When called from the loss function
-            if agent_name == "population" and config.shared_policies:
+            if agent_name == "population" and config.share_policy_nets:
                 return jax.vmap(train_state)(observation)
             return train_state(observation)
         
-        if config.shared_policies:
+        if config.share_policy_nets:
             population_logits_fn = jax.vmap(train_state.population.actor)
         else:
             population_logits_fn = partial(jax.vmap(lambda net, obs: net(obs)), train_state.population.actor)
@@ -193,11 +210,10 @@ def build_ppo_trainer(
         assert isinstance(train_state, TrainState) or (isinstance(train_state, eqx.Module) and agent_name is not None)
 
         if isinstance(train_state, eqx.Module): # When called from the loss function
-            if agent_name == "population" and config.shared_policies:
+            if agent_name == "population" and config.share_value_nets:
                 return jax.vmap(train_state)(observation)
             return train_state(observation)
-        
-        if config.shared_policies:
+        if config.share_value_nets:
             population_logits_fn = jax.vmap(train_state.population.critic)
         else:
             population_logits_fn = partial(jax.vmap(lambda net, obs: net(obs)), train_state.population.critic)
@@ -306,11 +322,10 @@ def build_ppo_trainer(
             """Do one epoch of update"""
 
             @eqx.filter_value_and_grad(has_aux=True)
-            def __ppo_los_fn(params, trajectory_minibatch, agent_name: str):
+            def __ppo_policy_loss_fn(params, trajectory_minibatch, agent_name: str):
                 (observations, actions, init_log_prob, init_value, advantages, returns) = trajectory_minibatch
 
-                action_logits = jax.vmap(get_action_logits_dict, in_axes=(0, None, None))(observations, params["actor"], agent_name)
-                value = jax.vmap(get_value_dict, in_axes=(0, None, None))(observations, params["critic"], agent_name)
+                action_logits = jax.vmap(get_action_logits_dict, in_axes=(0, None, None))(observations, params, agent_name)
                 action_dist = distrax.Categorical(logits=action_logits)
                 log_prob = action_dist.log_prob(actions)
                 entropy = action_dist.entropy().mean()
@@ -330,6 +345,21 @@ def build_ppo_trainer(
                 )
                 actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
 
+                count = getattr(train_state, agent_name).opt_state_policy[1][0].count
+                ent_coef = ent_coef_schedule[agent_name](count)
+                if ent_coef.size > 1:
+                    ent_coef = ent_coef[0]
+                # Total loss
+                total_loss = (
+                    actor_loss - ent_coef * entropy
+                )
+                return total_loss, (actor_loss, entropy)
+            
+            @eqx.filter_value_and_grad(has_aux=True)
+            def __ppo_critic_loss_fn(params, trajectory_minibatch, agent_name: str):
+                (observations, actions, init_log_prob, init_value, advantages, returns) = trajectory_minibatch
+                value = jax.vmap(get_value_dict, in_axes=(0, None, None))(observations, params, agent_name)
+
                 # critic loss
                 value_pred_clipped = init_value + (
                     jnp.clip(
@@ -339,15 +369,10 @@ def build_ppo_trainer(
                 value_losses = jnp.square(value - returns)
                 value_losses_clipped = jnp.square(value_pred_clipped - returns)
                 value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-                count = getattr(train_state, agent_name).opt_state[1][0].count
-                ent_coef = ent_coef_schedule[agent_name](count)
-                if ent_coef.size > 1:
-                    ent_coef = ent_coef[0]
+
                 # Total loss
-                total_loss = (
-                    actor_loss + config.vf_coef * value_loss - ent_coef * entropy
-                )
-                return total_loss, (actor_loss, value_loss, entropy)
+                total_loss = (config.vf_coef * value_loss)
+                return total_loss, (value_loss)
 
             def __update_over_minibatch(train_state: TrainState, minibatch):
                 trajectory_mb, advantages_mb, returns_mb = minibatch
@@ -364,28 +389,52 @@ def build_ppo_trainer(
                     if agent_name == "government" and not env.enable_government:
                         continue
                     agent_minibatch = jax.tree.map(lambda x: x[agent_name], minibatch, is_leaf=lambda i: isinstance(i, dict))
-                    if not config.shared_policies and agent_name == "population":
-                        loss_fn = jax.vmap(__ppo_los_fn, in_axes=(0, 1, None))
-                        update_fn = jax.vmap(optimizer.update)
+                    if agent_name == "population":
+                        if not config.share_policy_nets:
+                            policy_loss_fn = jax.vmap(__ppo_policy_loss_fn, in_axes=(0, 1, None))
+                            policy_update_fn = jax.vmap(optimizer.update)
+                        else:
+                            policy_loss_fn = __ppo_policy_loss_fn
+                            policy_update_fn = optimizer.update
+                        if not config.share_value_nets:
+                            value_loss_fn = jax.vmap(__ppo_critic_loss_fn, in_axes=(0, 1, None))
+                            value_update_fn = jax.vmap(optimizer.update)
+                        else:
+                            value_loss_fn = __ppo_critic_loss_fn
+                            value_update_fn = optimizer.update
                     else:
-                        loss_fn = __ppo_los_fn
-                        update_fn = optimizer.update
-                    (total_loss, (actor_loss, value_loss, entropy)), grads = loss_fn(
-                        {"actor": agent_state.actor, "critic": agent_state.critic},
-                        agent_minibatch,
-                        agent_name
+                        policy_loss_fn = __ppo_policy_loss_fn
+                        value_loss_fn = __ppo_critic_loss_fn
+                        policy_update_fn = optimizer.update
+                        value_update_fn = optimizer.update
+
+                    # update policy
+                    (total_loss, (actor_loss, entropy)), grads = policy_loss_fn(
+                        agent_state.actor, agent_minibatch, agent_name
                     )
-                    updates, new_opt_state = update_fn(
-                        grads, agent_state.opt_state
+                    updates, new_policy_opt_state = policy_update_fn(
+                        grads, agent_state.opt_state_policy
                     )
-                    new_networks = optax.apply_updates(
-                        {"actor": agent_state.actor, "critic": agent_state.critic}, updates
+                    new_policy_networks = optax.apply_updates(
+                        agent_state.actor, updates
                     )
+                    # update value
+                    (total_loss, (value_loss)), grads = value_loss_fn(
+                        agent_state.critic, agent_minibatch, agent_name
+                    )
+                    updates, new_value_opt_state = value_update_fn(
+                        grads, agent_state.opt_state_value
+                    )
+                    new_value_networks = optax.apply_updates(
+                        agent_state.critic, updates
+                    )
+
                     train_state = train_state._replace(
                         **{agent_name: AgentState(
-                            actor=new_networks["actor"],
-                            critic=new_networks["critic"],
-                            opt_state=new_opt_state,
+                            actor=new_policy_networks,
+                            critic=new_value_networks,
+                            opt_state_policy=new_policy_opt_state,
+                            opt_state_value=new_value_opt_state,
                         )}
                     )
 

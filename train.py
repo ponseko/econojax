@@ -24,9 +24,11 @@ argument_parser.add_argument("-r", "--num_resources", type=int, default=2)
 argument_parser.add_argument("-d", "--debug", action="store_true")
 argument_parser.add_argument("-l", "--load_model", type=str, default=None)
 argument_parser.add_argument("-i", "--individual_policies", action="store_true")
+argument_parser.add_argument("-iv", "--individual_value_nets", action="store_true")
 argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
-argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-npp", "--network_size_pop_policy", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-npv", "--network_size_pop_value", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11,step=2, dtype=int))
 argument_parser.add_argument("--eval_runs", type=int, default=3)
@@ -93,9 +95,11 @@ config = PpoTrainerParams(
     num_envs=args.num_envs,
     debug=args.debug,
     trainer_seed=args.seed,
-    shared_policies=not args.individual_policies,
+    share_policy_nets=not args.individual_policies,
+    share_value_nets=not args.individual_value_nets,
     num_log_episodes_after_training=args.eval_runs,
-    network_size_pop=args.network_size_pop,
+    network_size_pop_policy=args.network_size_pop_policy,
+    network_size_pop_value=args.network_size_pop_value,
     network_size_gov=args.network_size_gov,
     num_steps=args.rollout_length
 )

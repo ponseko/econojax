@@ -31,7 +31,8 @@ def log_eval_logs_to_wandb(log, args, wandb_project_name, config, env, id=None):
         ], dtype=int)
 
         resources = config["num_resources"]
-        shared_policy = config["shared_policies"]
+        shared_policy = config["share_policy_nets"]
+        shared_values = config["share_value_nets"]
         agent_ids = config["insert_agent_ids"]
         seed = config["trainer_seed"]
         wandb_id = run.id
@@ -40,7 +41,7 @@ def log_eval_logs_to_wandb(log, args, wandb_project_name, config, env, id=None):
             os.makedirs(folder)
 
         # save the action distribution dict as a file
-        name = f"{folder}/_r-{resources}_s-{shared_policy}_ai-{agent_ids}_seed-{seed}-{id}"
+        name = f"{folder}/_r-{resources}_s-{shared_policy}_sv-{shared_values}_ai-{agent_ids}_seed-{seed}-{id}"
         with open(f"{name}_{wandb_id}.pkl", "wb") as f:
             pickle.dump(log["population_actions"], f)
 
