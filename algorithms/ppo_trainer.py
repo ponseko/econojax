@@ -15,9 +15,6 @@ from algorithms.networks import ActorNetwork, ValueNetwork, ActorNetworkMultiDis
 from environment.economy import EconomyEnv
 from util.callbacks import logwrapper_callback, wandb_callback
 
-from jax.experimental import mesh_utils
-from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
-
 @chex.dataclass(frozen=True)
 class PpoTrainerParams:
     num_envs: int = 6
@@ -174,10 +171,6 @@ def build_ppo_trainer(
     reset_key = jax.random.split(reset_key, config.num_envs)
     obs_v, env_state_v = jax.vmap(env.reset, in_axes=(0))(reset_key)
 
-    num_devices = jax.device_count()
-    mesh = Mesh(devices=mesh_utils.create_device_mesh((num_devices)), axis_names=('x'))
-    env_state_v = jax.device_put(env_state_v, NamedSharding(mesh, P('x')))
-
     def get_action_logits_dict(observation, train_state: Union[TrainState, eqx.Module], agent_name: str = None):
         assert isinstance(train_state, TrainState) or (isinstance(train_state, eqx.Module) and agent_name is not None)
 
@@ -232,6 +225,9 @@ def build_ppo_trainer(
 
             done = jnp.any(jnp.logical_or(terminated["population"], truncated["population"]))
 
+            if "terminal_observation" in info.keys():
+                info.pop("terminal_observation")
+
             return (rng, obs_v, env_state, done, episode_reward), info
 
         rng, reset_key = jax.random.split(key)
@@ -254,7 +250,6 @@ def build_ppo_trainer(
 
         # functions prepended with _ are called in jax.lax.scan of train_step
 
-        @partial(jax.jit, backend=config.backend)
         def _env_step(runner_state, _):
             train_state, env_state, last_obs, rng = runner_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
@@ -289,7 +284,6 @@ def build_ppo_trainer(
             runner_state = (train_state, env_state, obsv, rng)
             return runner_state, transition
 
-        @partial(jax.jit, backend=config.backend)
         def _calculate_gae(gae_and_next_values, transition):
             gae, next_value = gae_and_next_values
             value, reward, done = (
@@ -308,7 +302,6 @@ def build_ppo_trainer(
             returns = jax.tree.map(jnp.add, gae, value)
             return (gae, value), (gae, returns)
 
-        @partial(jax.jit, backend=config.backend)
         def _update_epoch(update_state, _):
             """Do one epoch of update"""
 
@@ -356,7 +349,6 @@ def build_ppo_trainer(
                 )
                 return total_loss, (actor_loss, value_loss, entropy)
 
-            @partial(jax.jit, backend=config.backend)
             def __update_over_minibatch(train_state: TrainState, minibatch):
                 trajectory_mb, advantages_mb, returns_mb = minibatch
                 minibatch = (
@@ -474,26 +466,12 @@ def build_ppo_trainer(
         trained_train_state = runner_state[0]
         rng = runner_state[-1]
 
-        if config.num_log_episodes_after_training > 0:
-            rng, eval_key = jax.random.split(rng)
-            eval_keys = jax.random.split(
-                eval_key, config.num_log_episodes_after_training
-            )
-            eval_rewards, eval_logs = jax.vmap(eval_func, in_axes=(0, None))(
-                eval_keys, trained_train_state
-            )
-        else:
-            eval_rewards = None
-            eval_logs = None
-
         return {
             "train_state": trained_train_state,
             "train_metrics": metrics,
-            "eval_rewards": eval_rewards,
-            "eval_logs": eval_logs,
         }
 
-    return train_func
+    return train_func, eval_func
 
 if __name__ == "__main__":
     env_params = {

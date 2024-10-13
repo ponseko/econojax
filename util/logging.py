@@ -6,7 +6,7 @@ import jax
 import pickle
 import os
 
-def log_eval_logs_to_wandb(log, args, wandb_project_name, config, env):
+def log_eval_logs_to_wandb(log, args, wandb_project_name, config, env, id=None):
     if args.wandb_group is None:
         group_name = f"eval_logs_{int(time.time())}"
     else:
@@ -20,9 +20,8 @@ def log_eval_logs_to_wandb(log, args, wandb_project_name, config, env):
             tags=["eval"],
             group=group_name,
         )
-        for step in range(0, num_steps_per_episode, 50):
+        for step in range(0, num_steps_per_episode, 25):
             log_step = jax.tree.map(lambda x: x[env_id, step], log)
-            log_step.pop("terminal_observation")
             run.log(log_step)
 
         # ACTION DISTRIBUTION
@@ -41,7 +40,7 @@ def log_eval_logs_to_wandb(log, args, wandb_project_name, config, env):
             os.makedirs(folder)
 
         # save the action distribution dict as a file
-        name = f"{folder}/_r-{resources}_s-{shared_policy}_ai-{agent_ids}_seed-{seed}"
+        name = f"{folder}/_r-{resources}_s-{shared_policy}_ai-{agent_ids}_seed-{seed}-{id}"
         with open(f"{name}_{wandb_id}.pkl", "wb") as f:
             pickle.dump(log["population_actions"], f)
 

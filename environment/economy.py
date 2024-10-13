@@ -259,10 +259,6 @@ class EconomyEnv(JaxBaseEnv):
             count_per_bracket / self.num_population,
             state.tax_rates,
             average_prices / 10,
-            # self.tax_bracket_cutoffs[:-1] / 1000,
-            # state.start_year_inventory_coin / 1000,
-            # state.income_this_period_pre_tax / 1000,
-            # state.income_prev_period_pre_tax / 1000,
         ]).flatten()
 
         return {
@@ -351,26 +347,26 @@ class EconomyEnv(JaxBaseEnv):
         state_dict.update({"population_utility": state.utility["population"]})
         state_dict.update({"government_utility": state.utility["government"]})
         info_keys = [
-            "escrow_coin",
-            "escrow_resources",
+            # "escrow_coin",
+            # "escrow_resources",
             "inventory_coin",
             "inventory_labor",
-            "inventory_resources",
-            "skills_craft",
-            "skills_gather_resources",
+            # "inventory_resources",
+            # "skills_craft",
+            # "skills_gather_resources",
             "population_utility",
-            "government_utility",
+            # "government_utility",
             "population_actions",
-            "government_actions",
+            # "government_actions",
             "timestep",
-            "tax_rates",
+            # "tax_rates",
             "trade_price_history",
             "productivity",
             "equality",
-            "income_this_period_pre_tax",
-            "income_prev_period_pre_tax",
-            "marginal_income",
-            "net_tax_payed_prev_period",
+            # "income_this_period_pre_tax",
+            # "income_prev_period_pre_tax",
+            # "marginal_income",
+            # "net_tax_payed_prev_period",
         ]
         info = {}
         for key in info_keys:

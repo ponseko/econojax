@@ -75,7 +75,6 @@ ratios = jnp.nan_to_num(ratios, nan=0.0)
 ratios = ratios[ratios[:, 0].argsort(descending=True)]
 craft_skills = max_bonus_craft * ratios[:, 0]
 gather_skills = max_bonus_gather * ratios[:, 1:]
-print("skills\n", jnp.concatenate([craft_skills[:, None], gather_skills], axis=1))
 
 env = EconomyEnv(
     seed=args.population_seed,
@@ -112,13 +111,11 @@ if args.wandb:
         group=args.wandb_group
     )
 
-train_func = build_ppo_trainer(env, config, args.load_model)
+train_func, eval_func = build_ppo_trainer(env, config, args.load_model)
 train_func_jit = eqx.filter_jit(train_func, backend=config.backend)
 out = train_func_jit()
 trained_agent = out["train_state"]
 metrics = out["train_metrics"]
-eval_rewards = out["eval_rewards"]
-eval_logs = out["eval_logs"]
 
 # save the model
 if not os.path.exists("models"):
@@ -127,4 +124,17 @@ eqx.tree_serialise_leaves(f"models/ppo_{time.time()}", trained_agent)
 
 if args.wandb:
     wandb.finish()
-    log_eval_logs_to_wandb(eval_logs, args, WANDB_PROJECT_NAME, merged_config, env)
+
+if config.num_log_episodes_after_training > 0:
+    rng, eval_key = jax.random.split(rng)
+    eval_keys = jax.random.split(
+        eval_key, config.num_log_episodes_after_training
+    )
+    # eval_rewards, eval_logs = jax.vmap(eval_func, in_axes=(0, None))(
+    #     eval_keys, trained_agent
+    # )
+    # log_eval_logs_to_wandb(eval_logs, args, WANDB_PROJECT_NAME, merged_config, env)
+    for i in range(len(eval_keys)):
+        eval_rewards, eval_logs = eval_func(eval_key, trained_agent)
+        eval_logs = jax.tree.map(lambda x: np.expand_dims(x, axis=0), eval_logs)
+        log_eval_logs_to_wandb(eval_logs, args, WANDB_PROJECT_NAME, merged_config, env, id=i)
