@@ -39,6 +39,8 @@ class PpoTrainerParams:
     num_minibatches: int = 6  # Number of mini-batches
     update_epochs: int = 6  # K epochs to update the policy
     shared_policies: bool = True
+    # share_policy_nets: bool = True
+    # share_value_nets: bool = True
     network_size_pop: list = eqx.field(default_factory=lambda: [128, 128])
     network_size_gov: list = eqx.field(default_factory=lambda: [128, 128])
 
@@ -223,6 +225,9 @@ def build_ppo_trainer(
 
             done = jnp.any(jnp.logical_or(terminated["population"], truncated["population"]))
 
+            if "terminal_observation" in info.keys():
+                info.pop("terminal_observation")
+
             return (rng, obs_v, env_state, done, episode_reward), info
 
         rng, reset_key = jax.random.split(key)
@@ -245,7 +250,6 @@ def build_ppo_trainer(
 
         # functions prepended with _ are called in jax.lax.scan of train_step
 
-        @partial(jax.jit, backend=config.backend)
         def _env_step(runner_state, _):
             train_state, env_state, last_obs, rng = runner_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
@@ -280,7 +284,6 @@ def build_ppo_trainer(
             runner_state = (train_state, env_state, obsv, rng)
             return runner_state, transition
 
-        @partial(jax.jit, backend=config.backend)
         def _calculate_gae(gae_and_next_values, transition):
             gae, next_value = gae_and_next_values
             value, reward, done = (
@@ -299,7 +302,6 @@ def build_ppo_trainer(
             returns = jax.tree.map(jnp.add, gae, value)
             return (gae, value), (gae, returns)
 
-        @partial(jax.jit, backend=config.backend)
         def _update_epoch(update_state, _):
             """Do one epoch of update"""
 
@@ -347,7 +349,6 @@ def build_ppo_trainer(
                 )
                 return total_loss, (actor_loss, value_loss, entropy)
 
-            @partial(jax.jit, backend=config.backend)
             def __update_over_minibatch(train_state: TrainState, minibatch):
                 trajectory_mb, advantages_mb, returns_mb = minibatch
                 minibatch = (
@@ -465,26 +466,12 @@ def build_ppo_trainer(
         trained_train_state = runner_state[0]
         rng = runner_state[-1]
 
-        if config.num_log_episodes_after_training > 0:
-            rng, eval_key = jax.random.split(rng)
-            eval_keys = jax.random.split(
-                eval_key, config.num_log_episodes_after_training
-            )
-            eval_rewards, eval_logs = jax.vmap(eval_func, in_axes=(0, None))(
-                eval_keys, trained_train_state
-            )
-        else:
-            eval_rewards = None
-            eval_logs = None
-
         return {
             "train_state": trained_train_state,
             "train_metrics": metrics,
-            "eval_rewards": eval_rewards,
-            "eval_logs": eval_logs,
         }
 
-    return train_func
+    return train_func, eval_func
 
 if __name__ == "__main__":
     env_params = {
