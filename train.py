@@ -72,6 +72,7 @@ env = EconomyEnv(
     init_gather_skills=gather_skills,
     enable_government=args.enable_government,
     possible_trade_prices=args.trade_prices,
+    base_skill_development_multiplier=args.skill_multiplier,
     **env_parameters
 )
 print("skills\n", jnp.concatenate([env.init_craft_skills[:, None], env.init_gather_skills], axis=1))
