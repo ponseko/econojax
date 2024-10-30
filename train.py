@@ -1,6 +1,7 @@
 from environment.economy import EconomyEnv
 from algorithms.ppo_trainer import build_ppo_trainer, PpoTrainerParams
 from util.logging import log_eval_logs_to_wandb
+from util.util_functions import get_pareto_skill_dists
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -24,13 +25,17 @@ argument_parser.add_argument("-r", "--num_resources", type=int, default=2)
 argument_parser.add_argument("-d", "--debug", action="store_true")
 argument_parser.add_argument("-l", "--load_model", type=str, default=None)
 argument_parser.add_argument("-i", "--individual_policies", action="store_true")
+argument_parser.add_argument("-iv", "--individual_value_nets", action="store_true")
 argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
-argument_parser.add_argument("-np", "--network_size_pop", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-npp", "--network_size_pop_policy", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-npv", "--network_size_pop_value", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
 argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11,step=2, dtype=int))
 argument_parser.add_argument("--eval_runs", type=int, default=3)
 argument_parser.add_argument("--rollout_length", type=int, default=150)
+argument_parser.add_argument("--init_learned_skills", action="store_true")
+argument_parser.add_argument("--skill_multiplier", type=float, default=0.0)
 args, extra_args = argument_parser.parse_known_args()
 
 # Convert extra_args to a dictionary. we assume that they set environment parameters.
@@ -55,26 +60,9 @@ for i in range(0, len(extra_args), 2):
         value = True
     env_parameters[key] = value
 
-rng = jax.random.PRNGKey(args.population_seed) 
-rng, ratio_seed, shuffle_seed = jax.random.split(rng, 3)
-max_bonus_craft = 5
-max_bonus_gather = 3
-ratios = np.random.pareto(1, (50_000, ))
-ratios = jax.random.pareto(
-    ratio_seed, 
-    1, 
-    shape=(10000, args.num_agents, args.num_resources + 1)
-).sort().mean(axis=0)
-ratios = ratios / ratios.sum(axis=1, keepdims=True)
-ratios = jax.random.permutation(shuffle_seed, ratios, axis=1, independent=True)
-ratios = ratios + jax.random.normal(ratio_seed, ratios.shape) * 0.5 # some noise added
-ratios = jnp.maximum(0, ratios)
-ratios = ratios / ratios.sum(axis=1, keepdims=True)
-ratios = jnp.nan_to_num(ratios, nan=0.0)
-# order on the first skill, so we know the first agents are skilled at crafting
-ratios = ratios[ratios[:, 0].argsort(descending=True)]
-craft_skills = max_bonus_craft * ratios[:, 0]
-gather_skills = max_bonus_gather * ratios[:, 1:]
+craft_skills, gather_skills = None, None
+if args.init_learned_skills:
+    craft_skills, gather_skills = get_pareto_skill_dists(args.population_seed, args.num_agents, args.num_resources)
 
 env = EconomyEnv(
     seed=args.population_seed,
@@ -84,6 +72,7 @@ env = EconomyEnv(
     init_gather_skills=gather_skills,
     enable_government=args.enable_government,
     possible_trade_prices=args.trade_prices,
+    base_skill_development_multiplier=args.skill_multiplier,
     **env_parameters
 )
 print("skills\n", jnp.concatenate([env.init_craft_skills[:, None], env.init_gather_skills], axis=1))
@@ -93,9 +82,11 @@ config = PpoTrainerParams(
     num_envs=args.num_envs,
     debug=args.debug,
     trainer_seed=args.seed,
-    shared_policies=not args.individual_policies,
+    share_policy_nets=not args.individual_policies,
+    share_value_nets=not args.individual_value_nets,
     num_log_episodes_after_training=args.eval_runs,
-    network_size_pop=args.network_size_pop,
+    network_size_pop_policy=args.network_size_pop_policy,
+    network_size_pop_value=args.network_size_pop_value,
     network_size_gov=args.network_size_gov,
     num_steps=args.rollout_length
 )
@@ -126,6 +117,7 @@ if args.wandb:
     wandb.finish()
 
 if config.num_log_episodes_after_training > 0:
+    rng = jax.random.PRNGKey(args.seed)
     rng, eval_key = jax.random.split(rng)
     eval_keys = jax.random.split(
         eval_key, config.num_log_episodes_after_training

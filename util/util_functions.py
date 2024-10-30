@@ -1,4 +1,6 @@
 import jax.numpy as jnp
+import jax
+import numpy as np
 
 def argmax_2d_array(a, dtype=None):
     """ 
@@ -51,3 +53,26 @@ def get_gini(endowments):
     return 1 - (2 / (n_agents + 1)) * jnp.sum(
         jnp.cumsum(s_endows) / (jnp.sum(s_endows) + 1e-10)
     )
+
+def get_pareto_skill_dists(seed, num_agents, num_resources):
+    rng = jax.random.PRNGKey(seed) 
+    rng, ratio_seed, shuffle_seed = jax.random.split(rng, 3)
+    max_bonus_craft = 5
+    max_bonus_gather = 3
+    ratios = np.random.pareto(1, (50_000, ))
+    ratios = jax.random.pareto(
+        ratio_seed, 
+        1, 
+        shape=(10000, num_agents, num_resources + 1)
+    ).sort().mean(axis=0)
+    ratios = ratios / ratios.sum(axis=1, keepdims=True)
+    ratios = jax.random.permutation(shuffle_seed, ratios, axis=1, independent=True)
+    ratios = ratios + jax.random.normal(ratio_seed, ratios.shape) * 0.5 # some noise added
+    ratios = jnp.maximum(0, ratios)
+    ratios = ratios / ratios.sum(axis=1, keepdims=True)
+    ratios = jnp.nan_to_num(ratios, nan=0.0)
+    # order on the first skill, so we know the first agents are skilled at crafting
+    ratios = ratios[ratios[:, 0].argsort(descending=True)]
+    craft_skills = max_bonus_craft * ratios[:, 0]
+    gather_skills = max_bonus_gather * ratios[:, 1:]
+    return craft_skills, gather_skills

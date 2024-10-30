@@ -352,14 +352,14 @@ class EconomyEnv(JaxBaseEnv):
             "inventory_coin",
             "inventory_labor",
             # "inventory_resources",
-            # "skills_craft",
+            "skills_craft",
             # "skills_gather_resources",
             "population_utility",
             # "government_utility",
             "population_actions",
             # "government_actions",
             "timestep",
-            # "tax_rates",
+            "tax_rates",
             "trade_price_history",
             "productivity",
             "equality",
@@ -474,11 +474,9 @@ class EconomyEnv(JaxBaseEnv):
         will_craft = craft_actions * can_craft
 
         # Fixed arrays:
-        resources_to_craft_with = np.zeros(resource_inventories.shape, dtype=bool)
-        resources_to_craft_with[:, :self.craft_diff_resources_required] = True
-        resources_to_craft_with = jnp.array(resources_to_craft_with)
         highest_resource_indices = jnp.argsort(resource_inventories, axis=1, descending=True)
-        resources_to_craft_with = resources_to_craft_with[np.arange(self.num_population)[:, None], highest_resource_indices]
+        resources_to_craft_with = jnp.zeros(resource_inventories.shape, dtype=bool)
+        resources_to_craft_with = resources_to_craft_with.at[np.arange(self.num_population)[:, None], highest_resource_indices[:, :self.craft_diff_resources_required]].set(True)
         resource_changes = resources_to_craft_with * self.craft_num_resource_required * will_craft[:, None]
 
         resource_inventories -= resource_changes
