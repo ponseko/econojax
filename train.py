@@ -1,5 +1,7 @@
 from environment.economy import EconomyEnv
 from algorithms.ppo_trainer import build_ppo_trainer, PpoTrainerParams
+from util.logging import log_eval_logs_to_wandb
+from util.util_functions import get_pareto_skill_dists
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -8,6 +10,8 @@ import wandb
 import numpy as np
 import os
 import time
+
+wandb.require("core")
 
 WANDB_PROJECT_NAME = "EconoJax"
 argument_parser = argparse.ArgumentParser()
@@ -21,47 +25,70 @@ argument_parser.add_argument("-r", "--num_resources", type=int, default=2)
 argument_parser.add_argument("-d", "--debug", action="store_true")
 argument_parser.add_argument("-l", "--load_model", type=str, default=None)
 argument_parser.add_argument("-i", "--individual_policies", action="store_true")
+argument_parser.add_argument("-iv", "--individual_value_nets", action="store_true")
 argument_parser.add_argument("-g", "--enable_government", action="store_true")
 argument_parser.add_argument("-wg", "--wandb_group", type=str, default=None)
-args = argument_parser.parse_args()
+argument_parser.add_argument("-npp", "--network_size_pop_policy", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-npv", "--network_size_pop_value", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("-ng", "--network_size_gov", nargs="+", type=int, default=[128, 128])
+argument_parser.add_argument("--trade_prices", nargs="+", type=int, default=np.arange(1,11,step=2, dtype=int))
+argument_parser.add_argument("--eval_runs", type=int, default=3)
+argument_parser.add_argument("--rollout_length", type=int, default=150)
+argument_parser.add_argument("--init_learned_skills", action="store_true")
+argument_parser.add_argument("--skill_multiplier", type=float, default=0.0)
+args, extra_args = argument_parser.parse_known_args()
 
-rng = jax.random.PRNGKey(args.population_seed) 
-rng, ratio_seed, shuffle_seed = jax.random.split(rng, 3)
-max_bonus_craft = 5
-max_bonus_gather = 3
-ratios = np.random.pareto(1, (50_000, ))
-ratios = jax.random.pareto(
-    ratio_seed, 
-    1, 
-    shape=(10000, args.num_agents, args.num_resources + 1)
-).sort().mean(axis=0)
-ratios = ratios / ratios.sum(axis=1, keepdims=True)
-ratios = jax.random.permutation(shuffle_seed, ratios, axis=1, independent=True)
-ratios = ratios + jax.random.normal(ratio_seed, ratios.shape) * 0.5 # some noise added
-ratios = jnp.maximum(0, ratios)
-ratios = ratios / ratios.sum(axis=1, keepdims=True)
-ratios = jnp.nan_to_num(ratios, nan=0.0)
-# order on the first skill, so we know the first agents are skilled at crafting
-ratios = ratios[ratios[:, 0].argsort(descending=True)]
-craft_skills = max_bonus_craft * ratios[:, 0]
-gather_skills = max_bonus_gather * ratios[:, 1:]
-print("skills\n", jnp.concatenate([craft_skills[:, None], gather_skills], axis=1))
+# Convert extra_args to a dictionary. we assume that they set environment parameters.
+env_parameters = {}
+for i in range(0, len(extra_args), 2):
+    key = extra_args[i].lstrip('--')
+    # check if the value is a float or an int
+    if "." in extra_args[i + 1]:
+        try:
+            value = float(extra_args[i + 1])
+        except ValueError:
+            value = extra_args[i + 1]
+    else:
+        try:
+            value = int(extra_args[i + 1])
+        except ValueError:
+            value = extra_args[i + 1]
+    # if its a False or True string, convert it to a boolean
+    if value == "False":
+        value = False
+    elif value == "True":
+        value = True
+    env_parameters[key] = value
+
+craft_skills, gather_skills = None, None
+if args.init_learned_skills:
+    craft_skills, gather_skills = get_pareto_skill_dists(args.population_seed, args.num_agents, args.num_resources)
 
 env = EconomyEnv(
+    seed=args.population_seed,
     num_population=args.num_agents,
     num_resources=args.num_resources,
-    craft_skills=craft_skills,
-    gather_skills=gather_skills,
-    enable_government=args.enable_government
+    init_craft_skills=craft_skills,
+    init_gather_skills=gather_skills,
+    enable_government=args.enable_government,
+    possible_trade_prices=args.trade_prices,
+    base_skill_development_multiplier=args.skill_multiplier,
+    **env_parameters
 )
+print("skills\n", jnp.concatenate([env.init_craft_skills[:, None], env.init_gather_skills], axis=1))
 
 config = PpoTrainerParams(
     total_timesteps=args.total_timesteps,
     num_envs=args.num_envs,
     debug=args.debug,
     trainer_seed=args.seed,
-    shared_policies=not args.individual_policies,
-    num_log_episodes_after_training=3
+    share_policy_nets=not args.individual_policies,
+    share_value_nets=not args.individual_value_nets,
+    num_log_episodes_after_training=args.eval_runs,
+    network_size_pop_policy=args.network_size_pop_policy,
+    network_size_pop_value=args.network_size_pop_value,
+    network_size_gov=args.network_size_gov,
+    num_steps=args.rollout_length
 )
 
 merged_config = {**config.__dict__, **env.__dict__}
@@ -75,64 +102,31 @@ if args.wandb:
         group=args.wandb_group
     )
 
-train_func = build_ppo_trainer(env, config, args.load_model)
+train_func, eval_func = build_ppo_trainer(env, config, args.load_model)
 train_func_jit = eqx.filter_jit(train_func, backend=config.backend)
 out = train_func_jit()
 trained_agent = out["train_state"]
 metrics = out["train_metrics"]
-eval_rewards = out["eval_rewards"]
-eval_logs = out["eval_logs"]
 
 # save the model
 if not os.path.exists("models"):
     os.makedirs("models")
 eqx.tree_serialise_leaves(f"models/ppo_{time.time()}", trained_agent)
 
-def log_eval_logs_to_wandb(log):
-    import time
-    import matplotlib.pyplot as plt
-    if args.wandb_group is None:
-        group_name = f"eval_logs_{int(time.time())}"
-    else:
-        group_name = args.wandb_group
-    num_envs = log["timestep"].shape[0]
-    num_steps_per_episode = log["timestep"].shape[1]
-    for env_id in range(num_envs):
-        run = wandb.init(
-            project=WANDB_PROJECT_NAME,
-            config=merged_config,
-            tags=["eval"],
-            group=group_name,
-        )
-        for step in range(0, num_steps_per_episode, 20):
-            log_step = jax.tree.map(lambda x: x[env_id, step], log)
-            log_step.pop("terminal_observation")
-            run.log(log_step)
-
-        # ACTION DISTRIBUTION
-        bins = np.concatenate([
-            np.arange(0, env.trade_actions_total, 10, dtype=int),
-            np.arange(env.trade_actions_total, env.action_space("population").n + 1, dtype=int),
-        ], dtype=int)
-        for agent_id, agent_actions in eval_logs["population_actions"].items():
-            counts, _ = np.histogram(agent_actions[0], bins=bins)
-
-            labels = [label for pair in zip([f"buy_{i}" for i in range(env.num_resources)], [f"sell_{i}" for i in range(env.num_resources)]) for label in pair] + [f"gather_{i}" for i in range(env.num_resources)] + ["craft"]
-            if len(counts) > len(labels):
-                labels.append("noop")
-            action_dist = {
-                label: count for label, count in zip(labels, counts)
-            }
-            total = sum(action_dist.values())
-            action_dist = {k: v / total for k, v in action_dist.items()}
-            fig = plt.figure()
-            plt.bar(list(action_dist.keys()), action_dist.values())
-            plt.ylabel("Percentage of actions")
-            plt.ylim(0, 1)
-            run.log({f"Action dist agent {agent_id}": wandb.Image(fig)}, commit=agent_id == len(eval_logs["population_actions"]) - 1)
-            plt.close()
-        run.finish()
-
 if args.wandb:
     wandb.finish()
-    log_eval_logs_to_wandb(eval_logs)
+
+if config.num_log_episodes_after_training > 0:
+    rng = jax.random.PRNGKey(args.seed)
+    rng, eval_key = jax.random.split(rng)
+    eval_keys = jax.random.split(
+        eval_key, config.num_log_episodes_after_training
+    )
+    # eval_rewards, eval_logs = jax.vmap(eval_func, in_axes=(0, None))(
+    #     eval_keys, trained_agent
+    # )
+    # log_eval_logs_to_wandb(eval_logs, args, WANDB_PROJECT_NAME, merged_config, env)
+    for i in range(len(eval_keys)):
+        eval_rewards, eval_logs = eval_func(eval_key, trained_agent)
+        eval_logs = jax.tree.map(lambda x: np.expand_dims(x, axis=0), eval_logs)
+        log_eval_logs_to_wandb(eval_logs, args, WANDB_PROJECT_NAME, merged_config, env, id=i)

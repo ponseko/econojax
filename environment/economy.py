@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import equinox as eqx 
 from dataclasses import replace, asdict
+import optax
 
 from util.spaces import MultiDiscrete
 from util.util_functions import get_gini
@@ -50,6 +51,7 @@ DEFAULT_NUM_RESOURCES = 2 # e.g. stone and wood
 class EconomyEnv(JaxBaseEnv):
 
     name: str = "economy_env"
+    seed: int = 0
 
     num_population: int = DEFAULT_NUM_POPULATION # Excluding the government
     num_resources: int = DEFAULT_NUM_RESOURCES
@@ -61,19 +63,20 @@ class EconomyEnv(JaxBaseEnv):
     insert_agent_ids: bool = False
 
     starting_coin: int = 15
-    craft_skills: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION,)))
-    gather_skills: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.random.uniform(size=(DEFAULT_NUM_POPULATION, DEFAULT_NUM_RESOURCES)))
+    init_craft_skills: np.ndarray = None
+    init_gather_skills: np.ndarray = None
+    base_skill_development_multiplier: float = .0 # Allow skills to improve by performing actions (0 == no improvement)
+    max_skill_level: float = 5
     
     trade_expiry_time: int = 30
-    trade_price_floor: int = 1
-    trade_price_ceiling: int = 10
     max_orders_per_agent: int = 15
+    possible_trade_prices: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.arange(1, 11, step=2, dtype=np.int8))
     
-    coin_per_craft: int = 20 # multiplied by skill level
+    coin_per_craft: int = 20 # fixed multiplier of the craft skill
     gather_labor_cost: int = 1
     craft_labor_cost: int = 1
     trade_labor_cost: int = 0.05
-    craft_diff_resources_required: int = 2 # 0 == at least ``   `` of EACH resource
+    craft_diff_resources_required: int = 2 # 0 = log2(num_resources) rounded down
     craft_num_resource_required: int = 2 # Requirements per resource
 
     tax_bracket_cutoffs: np.ndarray = eqx.field(converter=np.asarray, default_factory=lambda: np.array([0, 380.980, 755.188, np.inf])) # Dutch tax bracket (scaled down by 100)
@@ -86,7 +89,8 @@ class EconomyEnv(JaxBaseEnv):
         return self.num_population + 1
     @property
     def trade_actions_per_resource(self):
-        return 2 * (self.trade_price_ceiling - self.trade_price_floor + 1) # 2 for buy and sell
+        # return 2 * (self.trade_price_ceiling - self.trade_price_floor + 1) # 2 for buy and sell
+        return 2 * len(self.possible_trade_prices)
     @property
     def trade_actions_total(self):
         return self.num_resources * self.trade_actions_per_resource
@@ -95,23 +99,37 @@ class EconomyEnv(JaxBaseEnv):
     @property
     def craft_action_index(self):
         return self.trade_actions_total + self.num_resources
+    
+    def __post_init__(self):
+        if self.craft_diff_resources_required == 0:
+            diff_required = int(np.log2(self.num_resources))
+            diff_required = np.clip(diff_required, 0, self.num_resources)
+            self.__setattr__("craft_diff_resources_required", int(diff_required))
+        
+        key = jax.random.PRNGKey(self.seed)
+        if self.init_craft_skills is None:
+            init_craft_skills = jax.random.normal(key, shape=(self.num_population,)) + 1
+            init_craft_skills = jnp.clip(init_craft_skills, 0, self.max_skill_level)
+            self.__setattr__("init_craft_skills", init_craft_skills)
+        if self.init_gather_skills is None:
+            init_gather_skills = jax.random.normal(key, shape=(self.num_population, self.num_resources)) + 1
+            init_gather_skills = jnp.clip(init_gather_skills, 0, self.max_skill_level)
+            self.__setattr__("init_gather_skills", init_gather_skills)
 
     def __check_init__(self):
         assert self.name
         assert self.num_population > 0
         assert self.max_steps_in_episode > 0
         assert 1 <= self.tax_period_length < self.max_steps_in_episode
-        assert len(self.gather_skills) == self.num_population
-        assert len(self.craft_skills) == self.num_population
-        assert (self.trade_actions_per_resource / 2) % 2 == 0, "The number of sell and buy actions per resource should be even"
+        assert len(self.init_gather_skills) == self.num_population
+        assert len(self.init_craft_skills) == self.num_population
+        # assert (self.trade_actions_per_resource / 2) % 2 == 0, "The number of sell and buy actions per resource should be even"
         assert self.tax_bracket_cutoffs[0] == 0, "The first tax bracket should start at 0"
         assert self.tax_bracket_cutoffs[-1] == np.inf, "The last tax bracket should be infinity"
         assert np.all(np.diff(self.tax_bracket_cutoffs) > 0), "Tax brackets should be sorted in ascending order"
         assert self.craft_diff_resources_required >= 0 and self.craft_diff_resources_required <= self.num_resources
-
-    def __post_init__(self):
-        if self.craft_diff_resources_required == 0:
-            self.__setattr__("craft_diff_resources_required", self.num_resources)
+        assert np.all(self.possible_trade_prices > 0), "Trade prices should be positive"
+        assert np.all(np.diff(self.possible_trade_prices) > 0), "Trade prices should be sorted in ascending order"
 
     @eqx.filter_jit
     def reset_env(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], EnvState]:
@@ -126,15 +144,15 @@ class EconomyEnv(JaxBaseEnv):
             inventory_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.int16),
             escrow_coin=jnp.zeros(self.num_population, dtype=jnp.int32),
             escrow_resources=jnp.zeros((self.num_population, self.num_resources), dtype=jnp.int16),
-            skills_craft=self.craft_skills, # fixed
-            skills_gather_resources=self.gather_skills, # fixed
-            market_orders=jnp.zeros((self.trade_expiry_time, self.num_resources, 2, self.num_population), dtype=jnp.int16), # 2 for buy and sell
-            trade_price_history=jnp.zeros((self.trade_expiry_time, self.num_resources), dtype=jnp.float32),
+            skills_craft=self.init_craft_skills,
+            skills_gather_resources=self.init_gather_skills,
+            market_orders=jnp.zeros((self.trade_expiry_time, self.num_resources, 2, self.num_population), dtype=jnp.int8), # 2 for buy and sell
+            trade_price_history=jnp.zeros((self.trade_expiry_time, self.num_resources), dtype=jnp.float16),
             tax_rates=jnp.zeros(len(self.tax_bracket_cutoffs) - 1, dtype=jnp.float32),
             start_year_inventory_coin=start_coin,
             income_this_period_pre_tax=jnp.zeros(self.num_population, dtype=jnp.int32),
             income_prev_period_pre_tax=jnp.zeros(self.num_population, dtype=jnp.int32),
-            marginal_income=jnp.zeros(self.num_population, dtype=jnp.float32),
+            marginal_income=jnp.ones(self.num_population, dtype=jnp.float32),
             net_tax_payed_prev_period=jnp.zeros(self.num_population, dtype=jnp.int32),
             timestep=0,
             productivity=0.,
@@ -241,10 +259,6 @@ class EconomyEnv(JaxBaseEnv):
             count_per_bracket / self.num_population,
             state.tax_rates,
             average_prices / 10,
-            # self.tax_bracket_cutoffs[:-1] / 1000,
-            # state.start_year_inventory_coin / 1000,
-            # state.income_this_period_pre_tax / 1000,
-            # state.income_prev_period_pre_tax / 1000,
         ]).flatten()
 
         return {
@@ -259,7 +273,8 @@ class EconomyEnv(JaxBaseEnv):
         resources_inventory = state.inventory_resources 
 
         ### trade
-        prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1)
+        # prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1)
+        prices = self.possible_trade_prices
         num_trade_actions = int(self.trade_actions_per_resource / 2)
         # Buy orders (need enough coin)
         buy_resource_masks = (coin_inventory[:, None] >= prices).astype(jnp.bool)
@@ -332,26 +347,26 @@ class EconomyEnv(JaxBaseEnv):
         state_dict.update({"population_utility": state.utility["population"]})
         state_dict.update({"government_utility": state.utility["government"]})
         info_keys = [
-            "escrow_coin",
-            "escrow_resources",
+            # "escrow_coin",
+            # "escrow_resources",
             "inventory_coin",
             "inventory_labor",
-            "inventory_resources",
+            # "inventory_resources",
             "skills_craft",
-            "skills_gather_resources",
+            # "skills_gather_resources",
             "population_utility",
-            "government_utility",
+            # "government_utility",
             "population_actions",
-            "government_actions",
+            # "government_actions",
             "timestep",
             "tax_rates",
             "trade_price_history",
             "productivity",
             "equality",
-            "income_this_period_pre_tax",
-            "income_prev_period_pre_tax",
-            "marginal_income",
-            "net_tax_payed_prev_period",
+            # "income_this_period_pre_tax",
+            # "income_prev_period_pre_tax",
+            # "marginal_income",
+            # "net_tax_payed_prev_period",
         ]
         info = {}
         for key in info_keys:
@@ -383,11 +398,12 @@ class EconomyEnv(JaxBaseEnv):
 
     @eqx.filter_jit
     def update_state(self, state: EnvState, action: Dict[str, chex.Array], rng: chex.PRNGKey) -> EnvState:
+        gather_key, trade_key = jax.random.split(rng, 2)
 
         # POPULATION
         population_actions = action["population"] # an array with a discrete action for each agent
-        state = self.component_gather_and_craft(state, population_actions, rng)
-        state = self.component_trading(state, population_actions)
+        state = self.component_gather_and_craft(state, population_actions, gather_key)
+        state = self.component_trading(state, population_actions, trade_key)
 
         # GOVERNMENT
         # NOTE: component taxation also updates parts of the observation that are used, even when government is disabled
@@ -458,16 +474,32 @@ class EconomyEnv(JaxBaseEnv):
         will_craft = craft_actions * can_craft
 
         # Fixed arrays:
-        resources_to_craft_with = np.zeros(resource_inventories.shape, dtype=bool)
-        resources_to_craft_with[:, :self.craft_diff_resources_required] = True
-        resources_to_craft_with = jnp.array(resources_to_craft_with)
         highest_resource_indices = jnp.argsort(resource_inventories, axis=1, descending=True)
-        resources_to_craft_with = resources_to_craft_with[np.arange(self.num_population)[:, None], highest_resource_indices]
+        resources_to_craft_with = jnp.zeros(resource_inventories.shape, dtype=bool)
+        resources_to_craft_with = resources_to_craft_with.at[np.arange(self.num_population)[:, None], highest_resource_indices[:, :self.craft_diff_resources_required]].set(True)
         resource_changes = resources_to_craft_with * self.craft_num_resource_required * will_craft[:, None]
 
         resource_inventories -= resource_changes
         # resource_inventories -= (craft_actions * self.craft_num_resource_required)[:, None].astype(jnp.int16)
         labor_inventories += (will_craft * self.craft_labor_cost)
+
+        # Skill development
+        if self.base_skill_development_multiplier > 0:
+            sched = optax.exponential_decay(
+                init_value=self.base_skill_development_multiplier, 
+                transition_steps=5, 
+                decay_rate=0.005
+            ) # learning with high skill is harder
+            gather_multiplier = sched(state.skills_gather_resources)
+            craft_multiplier = sched(state.skills_craft)
+            gather_skill_development = (gather_actions * gather_multiplier) + 1
+            skills_gather_resources = jnp.minimum(state.skills_gather_resources * gather_skill_development, self.max_skill_level)
+            craft_skill_development = (will_craft * craft_multiplier) + 1
+            skills_craft = jnp.minimum(state.skills_craft * craft_skill_development, self.max_skill_level)
+            state = state.replace(
+                skills_gather_resources=skills_gather_resources,
+                skills_craft=skills_craft
+            )
 
         return state.replace(
             inventory_coin=coin_inventories,
@@ -476,9 +508,10 @@ class EconomyEnv(JaxBaseEnv):
         )
 
     @eqx.filter_jit
-    def component_trading(self, state: EnvState, actions: chex.Array) -> EnvState:
+    def component_trading(self, state: EnvState, actions: chex.Array, key: chex.PRNGKey) -> EnvState:
         trade_time_index = state.timestep % self.trade_expiry_time
-        prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1, dtype=jnp.int16)
+        # prices = np.arange(self.trade_price_floor, self.trade_price_ceiling + 1, dtype=jnp.int16)
+        prices = self.possible_trade_prices
         num_trade_actions = self.trade_actions_total
 
         coin_inventory = state.inventory_coin
@@ -500,10 +533,10 @@ class EconomyEnv(JaxBaseEnv):
 
         ### Process actions (new bids/asks)
         # create a one-hot encoded matrix from the actions array (the first num_actions in actions are trade actions)
-        one_hot_market_actions = jax.nn.one_hot(actions, num_trade_actions, dtype=jnp.int16) # (num_population, num_trade_actions)
+        one_hot_market_actions = jax.nn.one_hot(actions, num_trade_actions, dtype=jnp.int8) # (num_population, num_trade_actions)
         one_hot_market_actions *= jnp.tile(prices, num_trade_actions // len(prices)) # correct for pricing
-        market_actions = one_hot_market_actions.reshape(self.num_population, self.num_resources, 2, -1).sum(axis=-1)
-        market_actions = jnp.moveaxis(market_actions, 0, -1).astype(jnp.int16) # (num_resources, 2, num_population) (these are the action of this timestep)
+        market_actions = one_hot_market_actions.reshape(self.num_population, self.num_resources, 2, -1).sum(axis=-1, dtype=jnp.int8)
+        market_actions = jnp.moveaxis(market_actions, 0, -1).astype(jnp.int8) # (num_resources, 2, num_population) (these are the action of this timestep)
 
         # update market state:
         market_orders = market_orders.at[trade_time_index].set(market_actions)
@@ -524,9 +557,12 @@ class EconomyEnv(JaxBaseEnv):
 
         def process_resource_orders(resource_orders: chex.Array):
             reordered_orders = jnp.squeeze(resource_orders, axis=1)
+            # randomize agent order such that final tie breaker is random
+            random_agent_order = jax.random.permutation(key, np.arange(self.num_population))
+            reordered_orders = reordered_orders[:, :, random_agent_order]
             reordered_orders = jnp.moveaxis(reordered_orders, 1, 0)
             reordered_orders = reordered_orders.reshape(2, -1)
-            agent_ids = jnp.tile(np.arange(self.num_population), self.trade_expiry_time)
+            agent_ids = jnp.tile(random_agent_order, self.trade_expiry_time)
             trade_times = jnp.repeat(np.arange(self.trade_expiry_time), self.num_population)
 
             buy_orders = reordered_orders[0]
@@ -588,7 +624,7 @@ class EconomyEnv(JaxBaseEnv):
         total_coin_escrow_changes = inventory_changes[:, :, 1].sum(axis=1)
         resource_inventory_changes = inventory_changes[:, :, 2].astype(jnp.int16)
         resource_escrow_changes = inventory_changes[:, :, 3].astype(jnp.int16)
-        avg_trade_price_this_step = jnp.array([x[1] for x in orders_out])
+        avg_trade_price_this_step = jnp.array([x[1] for x in orders_out], dtype=jnp.float16)
         market_orders_rolled = jnp.concatenate([x[2] for x in orders_out], axis=1)
 
         coin_inventory += total_coin_inventory_changes
@@ -655,7 +691,7 @@ class EconomyEnv(JaxBaseEnv):
             state.inventory_coin + state.escrow_coin,
             state.start_year_inventory_coin
         )
-        income_this_period_pre_tax = state.inventory_coin + state.escrow_coin - state.start_year_inventory_coin
+        income_this_period_pre_tax = state.inventory_coin + state.escrow_coin - start_year_inventory_coin
         
         state = jax.lax.cond(
             is_tax_day,
@@ -668,7 +704,7 @@ class EconomyEnv(JaxBaseEnv):
         highest_bracket_per_agent = jnp.digitize(income_this_period_pre_tax, self.tax_bracket_cutoffs) - 1
         applicable_tax_rates = state.tax_rates[highest_bracket_per_agent]
         return state.replace(
-            marginal_income=applicable_tax_rates,
+            marginal_income=1 - applicable_tax_rates,
             income_this_period_pre_tax=income_this_period_pre_tax,
             income_prev_period_pre_tax=income_prev_period_pre_tax,
             start_year_inventory_coin=start_year_inventory_coin
@@ -730,6 +766,3 @@ if __name__ == "__main__":
 
     (obs, reward, terminated, truncated, info), state = env.step(key, state, action)
     print(state, (obs, reward, terminated, truncated, info))
-
-
-    
