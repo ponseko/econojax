@@ -1,0 +1,19 @@
+[project]
+name = "econojax"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "jymkit[algs]>=0.0b2",
+]
+
+[project.scripts]
+econojax = "econojax:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
