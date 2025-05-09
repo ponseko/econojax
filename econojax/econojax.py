@@ -1,5 +1,5 @@
 from dataclasses import asdict, replace
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import equinox as eqx
 import jax
@@ -17,7 +17,7 @@ DEFAULT_NUM_RESOURCES = 2  # e.g. stone and wood
 
 
 class EnvState(eqx.Module):
-    utility: dict[str, Array]
+    utility: dict[str, float]
     productivity: float
     equality: float
 
@@ -51,7 +51,6 @@ class EnvState(eqx.Module):
 
 class EconoJax(Environment):
     seed: int = 0
-    multi_agent = True  # Must be set to True
 
     num_population: int = DEFAULT_NUM_POPULATION  # Excluding the government
     num_resources: int = DEFAULT_NUM_RESOURCES
@@ -63,8 +62,8 @@ class EconoJax(Environment):
     insert_agent_ids: bool = False
 
     starting_coin: int = 15
-    init_craft_skills: np.ndarray = None
-    init_gather_skills: np.ndarray = None
+    init_craft_skills: Array = None  # pyright: ignore
+    init_gather_skills: Array = None  # pyright: ignore
     base_skill_development_multiplier: float = (
         0.0  # Allow skills to improve by performing actions (0 == no improvement)
     )
@@ -80,7 +79,7 @@ class EconoJax(Environment):
     coin_per_craft: int = 20  # fixed multiplier of the craft skill
     gather_labor_cost: int = 1
     craft_labor_cost: int = 1
-    trade_labor_cost: int = 0.05
+    trade_labor_cost: float = 0.05
     craft_diff_resources_required: int = 2  # 0 = log2(num_resources) rounded down
     craft_num_resource_required: int = 2  # Requirements per resource
 
@@ -110,6 +109,10 @@ class EconoJax(Environment):
     @property
     def craft_action_index(self):
         return self.trade_actions_total + self.num_resources
+
+    @property
+    def multi_agent(self):
+        return True
 
     def __post_init__(self):
         if self.craft_diff_resources_required == 0:
@@ -187,21 +190,21 @@ class EconoJax(Environment):
         return observations, state
 
     def step_env(
-        self, rng: PRNGKeyArray, state: EnvState, actions: Dict[str, Array]
+        self, key: PRNGKeyArray, state: EnvState, action: Dict[str, Array]
     ) -> Tuple[jym.TimeStep, EnvState]:
         # actions dict is sorted [see](https://github.com/jax-ml/jax/pull/26069)
         # we re-sort the actions dict to match the action_space and split
         # into {"population": ..., "government": ...}
         population_actions = {
-            key: actions[key] for key in self.action_space.keys() if key != "government"
+            key: action[key] for key in self.action_space.keys() if key != "government"
         }
-        population_actions = jnp.stack(population_actions.values())
+        population_actions = jnp.stack([*population_actions.values()])
         actions = {
             "population": population_actions,
-            "government": actions["government"],
+            "government": action["government"],
         }
 
-        new_state = self.update_state(state, actions, rng)
+        new_state = self.update_state(state, actions, key)
         observations = self.get_observations_and_action_masks(new_state)
         reward = self.get_rewards(state, new_state)
         terminated, truncated = self.get_terminated_truncated(new_state)
@@ -271,7 +274,7 @@ class EconoJax(Environment):
         ]
         if self.insert_agent_ids:
             agent_ids = np.arange(self.num_population)
-            binary_agent_ids = (
+            binary_agent_ids: Any = (
                 (
                     agent_ids[:, None]
                     & (1 << np.arange(self.num_population.bit_length()))
@@ -335,7 +338,7 @@ class EconoJax(Environment):
         observations["government"] = observation_government
         return observations
 
-    def get_action_masks(self, state: EnvState) -> Array:
+    def get_action_masks(self, state: EnvState) -> Dict[str, Array]:
         # For convinience, trade actions will be the first actions, this is helpful in the trade_action_processing function
         coin_inventory = state.inventory_coin
         resources_inventory = state.inventory_resources
@@ -407,7 +410,7 @@ class EconoJax(Environment):
         truncated = state.timestep >= self.max_steps_in_episode
         return terminated, truncated
 
-    def get_info(self, state: EnvState, actions) -> Dict[str, Array]:
+    def get_info(self, state: EnvState, actions) -> Dict:
         if not self.create_info:
             return {
                 "coin": state.inventory_coin,
@@ -480,7 +483,7 @@ class EconoJax(Environment):
             timestep=state.timestep + 1,
         )
 
-    def calculate_utilities(self, state: EnvState) -> Dict[str, Array]:
+    def calculate_utilities(self, state: EnvState) -> EnvState:
         """
         Utility functions per agent, dictating the rewards.
         Rewards are the difference in utility per timestep.
@@ -897,7 +900,7 @@ class EconoJax(Environment):
         government_actions = np.full(
             government_num_brackets, government_num_actions_per_bracket
         )
-        government_action_space = jym.MultiDiscrete(government_actions)
+        government_action_space = jym.MultiDiscrete(government_actions)  # type: ignore
         return {
             f"p{i}": population_action_space for i in range(self.num_population)
         } | {"government": government_action_space}
