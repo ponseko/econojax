@@ -1,14 +1,14 @@
 [project]
 name = "econojax"
 version = "0.1.0"
-description = "Add your description here"
+description = "A Fast & Scalable Economic Simulation in Jax"
 readme = "README.md"
 authors = [
     { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "jymkit[algs]>=0.0b5",
+    "jaxnasium[algs]>=0.0.23",
 ]
 
 [project.scripts]
