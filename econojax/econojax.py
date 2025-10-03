@@ -4,11 +4,11 @@ from typing import Any, Dict, Tuple
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jymkit as jym
+import jaxnasium as jym
 import numpy as np
 import optax
+from jaxnasium import Environment
 from jaxtyping import Array, PRNGKeyArray
-from jymkit import Environment
 
 from .util import get_gini
 
@@ -114,6 +114,15 @@ class EconoJax(Environment):
     def multi_agent(self):
         return True
 
+    @property
+    def pop_str_width(self):
+        """Width of the string to represent the population names, to pad agent names with zeros.
+        E.g. for 12 agents, the width is 2, so agents are named a00, a01, ..., a11
+        This ensures sorting the agent dicts does not reorder the agents incorrectly. This may be important
+        as some jax operations sort dict keys.
+        """
+        return len(str(self.num_population - 1))
+
     def __post_init__(self):
         if self.craft_diff_resources_required == 0:
             diff_required = int(np.log2(self.num_resources))
@@ -153,7 +162,9 @@ class EconoJax(Environment):
 
     def reset_env(self, key: PRNGKeyArray) -> Tuple[Dict[str, Array], EnvState]:
         start_coin = jnp.ones(self.num_population, dtype=jnp.int32) * self.starting_coin
-        initial_utilities = {f"p{i}": 0.0 for i in range(self.num_population)}
+        initial_utilities = {
+            f"a{i:0{self.pop_str_width}}": 0.0 for i in range(self.num_population)
+        }
         initial_utilities["government"] = 0.0
         state = EnvState(
             utility=initial_utilities,
@@ -333,7 +344,8 @@ class EconoJax(Environment):
         ).flatten()
 
         observations = {
-            f"p{i}": observations_population[i] for i in range(self.num_population)
+            f"a{i:0{self.pop_str_width}}": observations_population[i]
+            for i in range(self.num_population)
         }
         observations["government"] = observation_government
         return observations
@@ -396,7 +408,8 @@ class EconoJax(Environment):
         )
 
         action_masks = {
-            f"p{i}": population_masks[i] for i in range(self.num_population)
+            f"a{i:0{self.pop_str_width}}": population_masks[i]
+            for i in range(self.num_population)
         }
         action_masks["government"] = government_masks
         return action_masks
@@ -508,7 +521,8 @@ class EconoJax(Environment):
         util_government = equality_weighted * productivity
 
         utilities = {
-            f"p{i}": util_population[i] for i in range(self.num_population)
+            f"a{i:0{self.pop_str_width}}": util_population[i]
+            for i in range(self.num_population)
         } | {
             "government": util_government,
         }
@@ -902,5 +916,6 @@ class EconoJax(Environment):
         )
         government_action_space = jym.MultiDiscrete(government_actions)  # type: ignore
         return {
-            f"p{i}": population_action_space for i in range(self.num_population)
+            f"a{i:0{self.pop_str_width}}": population_action_space
+            for i in range(self.num_population)
         } | {"government": government_action_space}

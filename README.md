@@ -1,6 +1,6 @@
 # EconoJax: A Fast & Scalable Economic Simulation in JAX
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
 EconoJax is (loosely) a reimplementation of [The AI Economist](https://www.science.org/doi/10.1126/sciadv.abk2607) in JAX with a 1D observation space rather than the original 2D visual space.
 With GPU support, EconoJax's transition function is over 100x times faster and agents converge over **2000x** times faster.

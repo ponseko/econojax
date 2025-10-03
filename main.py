@@ -1,7 +1,7 @@
 # A simple training script to train a PPO agent on the EconoJax environment.
 import jax
-import jymkit as jym
-from jymkit.algorithms import PPO
+import jaxnasium as jym
+from jaxnasium.algorithms import PPO
 
 from econojax import EconoJax
 
