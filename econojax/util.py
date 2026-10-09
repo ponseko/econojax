@@ -1,6 +1,7 @@
-import jax.numpy as jnp
 import jax
+import jax.numpy as jnp
 import numpy as np
+
 
 def argmax_2d_array(a, dtype=None):
     """ 
