@@ -1,5 +1,5 @@
 from dataclasses import asdict, replace
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -111,7 +111,7 @@ class EconoJax(Environment):
         return self.trade_actions_total + self.num_resources
 
     @property
-    def multi_agent(self):
+    def _multi_agent(self):
         return True
 
     @property
@@ -160,7 +160,7 @@ class EconoJax(Environment):
             "Trade prices must be strictly increasing"
         )
 
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[Dict[str, Array], EnvState]:
+    def reset_env(self, key: PRNGKeyArray) -> tuple[dict[str, Array], EnvState]:
         start_coin = jnp.ones(self.num_population, dtype=jnp.int32) * self.starting_coin
         initial_utilities = {
             f"a{i:0{self.pop_str_width}}": 0.0 for i in range(self.num_population)
@@ -201,13 +201,13 @@ class EconoJax(Environment):
         return observations, state
 
     def step_env(
-        self, key: PRNGKeyArray, state: EnvState, action: Dict[str, Array]
-    ) -> Tuple[jym.TimeStep, EnvState]:
+        self, key: PRNGKeyArray, state: EnvState, action: dict[str, Array]
+    ) -> tuple[jym.TimeStep, EnvState]:
         # actions dict is sorted [see](https://github.com/jax-ml/jax/pull/26069)
         # we re-sort the actions dict to match the action_space and split
         # into {"population": ..., "government": ...}
         population_actions = {
-            key: action[key] for key in self.action_space.keys() if key != "government"
+            key: action[key] for key in self.action_space if key != "government"
         }
         population_actions = jnp.stack([*population_actions.values()])
         actions = {
@@ -225,7 +225,7 @@ class EconoJax(Environment):
             observations, reward, terminated, truncated, info
         ), new_state
 
-    def get_observations_and_action_masks(self, state: EnvState) -> Dict[str, Array]:
+    def get_observations_and_action_masks(self, state: EnvState) -> dict[str, Array]:
         obs = self.get_observations(state)
         action_masks = self.get_action_masks(state)
         observations = jax.tree.map(
@@ -233,7 +233,7 @@ class EconoJax(Environment):
         )
         return observations
 
-    def get_observations(self, state: EnvState) -> Dict[str, Array]:
+    def get_observations(self, state: EnvState) -> dict[str, Array]:
         """
         Should take in a state and return an observation array of shape (num_population, num_features)
         Also returns the action mask of shape (num_population, num_actions)
@@ -350,7 +350,7 @@ class EconoJax(Environment):
         observations["government"] = observation_government
         return observations
 
-    def get_action_masks(self, state: EnvState) -> Dict[str, Array]:
+    def get_action_masks(self, state: EnvState) -> dict[str, Array]:
         # For convinience, trade actions will be the first actions, this is helpful in the trade_action_processing function
         coin_inventory = state.inventory_coin
         resources_inventory = state.inventory_resources
@@ -418,12 +418,12 @@ class EconoJax(Environment):
         """Returns the difference in utility for a timestep as the reward"""
         return jax.tree.map(lambda x, y: y - x, old_state.utility, new_state.utility)
 
-    def get_terminated_truncated(self, state: EnvState) -> Tuple[bool, bool]:
+    def get_terminated_truncated(self, state: EnvState) -> tuple[bool, bool]:
         terminated = False  # no termination
         truncated = state.timestep >= self.max_steps_in_episode
         return terminated, truncated
 
-    def get_info(self, state: EnvState, actions) -> Dict:
+    def get_info(self, state: EnvState, actions) -> dict:
         if not self.create_info:
             return {
                 "coin": state.inventory_coin,
@@ -434,7 +434,16 @@ class EconoJax(Environment):
         state_dict = asdict(state)
         state_dict.update({"population_actions": actions["population"]})
         state_dict.update({"government_actions": actions["government"]})
-        state_dict.update({"population_utility": state.utility["population"]})
+        state_dict.update(
+            {
+                "population_utility": jnp.stack(
+                    [
+                        state.utility[f"a{i:0{self.pop_str_width}}"]
+                        for i in range(self.num_population)
+                    ]
+                )
+            }
+        )
         state_dict.update({"government_utility": state.utility["government"]})
         info_keys = [
             "inventory_coin",
@@ -470,7 +479,7 @@ class EconoJax(Environment):
         return info
 
     def update_state(
-        self, state: EnvState, action: Dict[str, Array], rng: PRNGKeyArray
+        self, state: EnvState, action: dict[str, Array], rng: PRNGKeyArray
     ) -> EnvState:
         gather_key, trade_key = jax.random.split(rng, 2)
 
@@ -558,7 +567,7 @@ class EconoJax(Environment):
         labor_inventories += jnp.any(gather_actions, axis=1) * self.gather_labor_cost
 
         craft_actions = agent_actions == self.craft_action_index
-        craft_actions = craft_actions  # & (resource_inventories >= self.craft_num_resource_required).all(axis=1)
+        # craft_actions = craft_actions  # & (resource_inventories >= self.craft_num_resource_required).all(axis=1)
         craft_gains = craft_actions * (self.coin_per_craft * state.skills_craft).astype(
             jnp.int32
         )
@@ -888,15 +897,23 @@ class EconoJax(Environment):
 
     @property
     def observation_space(self):
-        obs, _ = self.reset(jax.random.PRNGKey(0))
+        obs, _ = jax.eval_shape(self.reset, jax.random.PRNGKey(0))
         return {
-            key: jym.Box(
-                low=jnp.full(obs[key].observation.shape[0], 0),
-                high=jnp.full(obs[key].observation.shape[0], 1000),
-                shape=obs[key].observation.shape,
-                dtype=jnp.float32,
+            key: jym.AgentObservation(
+                observation=jym.Box(
+                    low=np.full(o.observation.shape, 0),
+                    high=np.full(o.observation.shape, 1000),
+                    shape=o.observation.shape,
+                    dtype=jnp.float32,
+                ),
+                action_mask=jym.Box(
+                    low=np.full(o.action_mask.shape, False),
+                    high=np.full(o.action_mask.shape, True),
+                    shape=o.action_mask.shape,
+                    dtype=jnp.bool_,
+                ),
             )
-            for key in obs.keys()
+            for key, o in obs.items()
         }
 
     @property
