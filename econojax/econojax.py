@@ -111,7 +111,7 @@ class EconoJax(Environment):
         return self.trade_actions_total + self.num_resources
 
     @property
-    def multi_agent(self):
+    def _multi_agent(self):
         return True
 
     @property
@@ -434,7 +434,16 @@ class EconoJax(Environment):
         state_dict = asdict(state)
         state_dict.update({"population_actions": actions["population"]})
         state_dict.update({"government_actions": actions["government"]})
-        state_dict.update({"population_utility": state.utility["population"]})
+        state_dict.update(
+            {
+                "population_utility": jnp.stack(
+                    [
+                        state.utility[f"a{i:0{self.pop_str_width}}"]
+                        for i in range(self.num_population)
+                    ]
+                )
+            }
+        )
         state_dict.update({"government_utility": state.utility["government"]})
         info_keys = [
             "inventory_coin",
@@ -888,15 +897,23 @@ class EconoJax(Environment):
 
     @property
     def observation_space(self):
-        obs, _ = self.reset(jax.random.PRNGKey(0))
+        obs, _ = jax.eval_shape(self.reset, jax.random.PRNGKey(0))
         return {
-            key: jym.Box(
-                low=jnp.full(obs[key].observation.shape[0], 0),
-                high=jnp.full(obs[key].observation.shape[0], 1000),
-                shape=obs[key].observation.shape,
-                dtype=jnp.float32,
+            key: jym.AgentObservation(
+                observation=jym.Box(
+                    low=np.full(o.observation.shape, 0),
+                    high=np.full(o.observation.shape, 1000),
+                    shape=o.observation.shape,
+                    dtype=jnp.float32,
+                ),
+                action_mask=jym.Box(
+                    low=np.full(o.action_mask.shape, False),
+                    high=np.full(o.action_mask.shape, True),
+                    shape=o.action_mask.shape,
+                    dtype=jnp.bool_,
+                ),
             )
-            for key in obs.keys()
+            for key, o in obs.items()
         }
 
     @property

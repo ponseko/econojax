@@ -1,19 +1,19 @@
 [project]
 name = "econojax"
-version = "0.1.0"
-description = "A Fast & Scalable Economic Simulation in Jax"
+version = "0.1.1"
+description = "EconoJax: A Fast & Scalable Economic Simulation in JAX"
 readme = "README.md"
 authors = [
     { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "jaxnasium[algs]>=0.0.23",
+    "jaxnasium[algs]>=0.1.0",
 ]
 
-[project.scripts]
-econojax = "econojax:main"
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.12.24,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
